@@ -1,0 +1,897 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Treino de Notas no Braço da Guitarra</title>
+  <style>
+    :root {
+      --bg: #111827;
+      --panel: #1f2937;
+      --panel2: #273244;
+      --text: #f9fafb;
+      --muted: #9ca3af;
+      --accent: #38bdf8;
+      --ok: #22c55e;
+      --bad: #ef4444;
+      --warn: #f59e0b;
+      --line: #374151;
+      --wood: #8b5a2b;
+      --wood2: #a56a35;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: Arial, Helvetica, sans-serif;
+      background: radial-gradient(circle at top, #1e293b, var(--bg));
+      color: var(--text);
+    }
+
+    .app {
+      max-width: 1150px;
+      margin: 0 auto;
+      padding: 22px;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      align-items: center;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(24px, 3vw, 38px);
+    }
+
+    .subtitle {
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 15px;
+    }
+
+    .nav {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    button {
+      border: 0;
+      border-radius: 12px;
+      padding: 12px 16px;
+      background: var(--panel2);
+      color: var(--text);
+      font-weight: 700;
+      cursor: pointer;
+      transition: transform .08s ease, background .15s ease, opacity .15s ease;
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+      background: #334155;
+    }
+
+    button.primary {
+      background: var(--accent);
+      color: #082f49;
+    }
+
+    button.ok {
+      background: var(--ok);
+      color: #052e16;
+    }
+
+    button.bad {
+      background: var(--bad);
+      color: #450a0a;
+    }
+
+    button:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .screen {
+      display: none;
+      background: rgba(31, 41, 55, .9);
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 18px;
+      padding: 18px;
+      box-shadow: 0 16px 40px rgba(0,0,0,.25);
+    }
+
+    .screen.active {
+      display: block;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin: 18px 0;
+    }
+
+    .card {
+      background: rgba(17, 24, 39, .6);
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 16px;
+      padding: 16px;
+    }
+
+    .card h3 {
+      margin: 0 0 8px;
+      color: var(--muted);
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+
+    .big {
+      font-size: clamp(34px, 8vw, 80px);
+      font-weight: 900;
+      line-height: 1;
+      margin: 8px 0;
+    }
+
+    .target {
+      color: var(--accent);
+    }
+
+    .status {
+      font-size: 18px;
+      font-weight: 700;
+      margin-top: 10px;
+      min-height: 28px;
+    }
+
+    .status.okText {
+      color: var(--ok);
+    }
+
+    .status.badText {
+      color: var(--bad);
+    }
+
+    .status.warnText {
+      color: var(--warn);
+    }
+
+    .controls {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin-top: 12px;
+    }
+
+    .small {
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+    }
+
+    .config-list {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(110px, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .check {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(17,24,39,.7);
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,.08);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .check input {
+      transform: scale(1.3);
+      accent-color: var(--accent);
+    }
+
+    .settings-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin-top: 16px;
+      align-items: center;
+    }
+
+    input[type="number"] {
+      width: 90px;
+      padding: 10px;
+      border-radius: 10px;
+      border: 1px solid rgba(255,255,255,.12);
+      background: #111827;
+      color: var(--text);
+      font-weight: 700;
+    }
+
+    .fretboard-wrap {
+      overflow-x: auto;
+      padding: 12px 0 4px;
+      margin-top: 12px;
+    }
+
+    .fretboard {
+      min-width: 880px;
+      position: relative;
+      display: grid;
+      grid-template-columns: 80px repeat(var(--frets), 62px);
+      grid-template-rows: repeat(6, 54px);
+      border-radius: 14px;
+      overflow: hidden;
+      border: 3px solid #4b2e16;
+      background: linear-gradient(90deg, var(--wood), var(--wood2));
+    }
+
+    .string-label {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(17,24,39,.7);
+      border-right: 5px solid #d1d5db;
+      border-bottom: 1px solid rgba(255,255,255,.15);
+      font-weight: 900;
+      color: #f9fafb;
+      z-index: 2;
+    }
+
+    .cell {
+      position: relative;
+      border-right: 3px solid rgba(229,231,235,.65);
+      border-bottom: 1px solid rgba(255,255,255,.14);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+
+    .cell.disabled-string {
+      opacity: .25;
+      cursor: not-allowed;
+    }
+
+    .cell::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 50%;
+      height: 3px;
+      transform: translateY(-50%);
+      background: rgba(240,240,240,.75);
+      box-shadow: 0 1px 2px rgba(0,0,0,.35);
+    }
+
+    .dot {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(17,24,39,.75);
+      color: white;
+      font-weight: 900;
+      z-index: 1;
+      border: 1px solid rgba(255,255,255,.2);
+    }
+
+    .cell.show-answer .dot {
+      display: flex;
+      background: var(--accent);
+      color: #082f49;
+    }
+
+    .cell.correct .dot {
+      display: flex;
+      background: var(--ok);
+      color: #052e16;
+    }
+
+    .cell.wrong .dot {
+      display: flex;
+      background: var(--bad);
+      color: #450a0a;
+    }
+
+    .fret-numbers {
+      min-width: 880px;
+      display: grid;
+      grid-template-columns: 80px repeat(var(--frets), 62px);
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+    }
+
+    .score {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 12px;
+    }
+
+    .pill {
+      background: rgba(17, 24, 39, .7);
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 999px;
+      padding: 8px 12px;
+      font-weight: 700;
+    }
+
+    @media (max-width: 780px) {
+      .grid {
+        grid-template-columns: 1fr;
+      }
+
+      .config-list {
+        grid-template-columns: repeat(2, minmax(120px, 1fr));
+      }
+
+      header {
+        align-items: flex-start;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div>
+        <h1>Treino de Notas da Guitarra</h1>
+        <div class="subtitle">Decore o braço da guitarra treinando por corda, nota e posição.</div>
+      </div>
+
+      <div class="nav">
+        <button class="primary" onclick="showScreen('normal')">Modo Normal</button>
+        <button class="primary" onclick="showScreen('simulation')">Modo Simulação</button>
+        <button onclick="showScreen('settings')">Configurações</button>
+      </div>
+    </header>
+
+    <section id="normal" class="screen active">
+      <h2>Modo Normal</h2>
+      <p class="small">
+        O app sorteia uma corda e uma nota. Toque essa nota na guitarra. O navegador escuta o microfone e valida a frequência detectada.
+        Em celular e computador, o microfone normalmente só funciona em <b>HTTPS</b> ou em <b>localhost</b>.
+      </p>
+
+      <div class="grid">
+        <div class="card">
+          <h3>Corda sorteada</h3>
+          <div id="normalString" class="big target">-</div>
+        </div>
+        <div class="card">
+          <h3>Nota alvo</h3>
+          <div id="normalNote" class="big target">-</div>
+        </div>
+        <div class="card">
+          <h3>Você tocou</h3>
+          <div id="detectedNote" class="big">-</div>
+        </div>
+      </div>
+
+      <div class="score">
+        <div class="pill">Acertos: <span id="normalHits">0</span></div>
+        <div class="pill">Tentativas: <span id="normalAttempts">0</span></div>
+        <div class="pill">Frequência: <span id="detectedFreq">-</span></div>
+      </div>
+
+      <div id="normalStatus" class="status warnText">Clique em “Iniciar microfone”.</div>
+
+      <div class="controls">
+        <button class="ok" onclick="startMic()">Iniciar microfone</button>
+        <button onclick="newNormalChallenge()">Nova nota</button>
+        <button class="bad" onclick="stopMic()">Parar microfone</button>
+      </div>
+    </section>
+
+    <section id="simulation" class="screen">
+      <h2>Modo Simulação</h2>
+      <p class="small">
+        O app sorteia uma corda e uma nota. Clique no traste correto daquela corda. As cordas desativadas nas configurações ficam esmaecidas.
+      </p>
+
+      <div class="grid">
+        <div class="card">
+          <h3>Corda sorteada</h3>
+          <div id="simString" class="big target">-</div>
+        </div>
+        <div class="card">
+          <h3>Nota alvo</h3>
+          <div id="simNote" class="big target">-</div>
+        </div>
+        <div class="card">
+          <h3>Resultado</h3>
+          <div id="simResult" class="big">-</div>
+        </div>
+      </div>
+
+      <div class="score">
+        <div class="pill">Acertos: <span id="simHits">0</span></div>
+        <div class="pill">Tentativas: <span id="simAttempts">0</span></div>
+      </div>
+
+      <div id="simStatus" class="status warnText">Clique em “Nova nota”.</div>
+
+      <div class="controls">
+        <button onclick="newSimChallenge()">Nova nota</button>
+        <button onclick="toggleAnswer()">Mostrar/Ocultar resposta</button>
+      </div>
+
+      <div class="fretboard-wrap">
+        <div id="fretNumbers" class="fret-numbers"></div>
+        <div id="fretboard" class="fretboard"></div>
+      </div>
+    </section>
+
+    <section id="settings" class="screen">
+      <h2>Configurações</h2>
+      <p class="small">Selecione quais cordas participarão dos desafios. A afinação padrão usada é E A D G B E.</p>
+
+      <div class="config-list" id="stringConfig"></div>
+
+      <div class="settings-row">
+        <label>
+          Quantidade de trastes:
+          <input id="fretCount" type="number" min="5" max="24" value="12" />
+        </label>
+
+        <label>
+          Tolerância do microfone em cents:
+          <input id="toleranceCents" type="number" min="10" max="80" value="35" />
+        </label>
+
+        <button class="primary" onclick="saveSettings()">Salvar configurações</button>
+      </div>
+
+      <p class="small">
+        Dica: para começar, treine uma corda por vez. Exemplo: deixe somente a corda A ativa até decorar todas as notas dela.
+      </p>
+    </section>
+  </div>
+
+  <script>
+    const noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+
+    const strings = [
+      { id: "E6", label: "E grave", short: "E", midi: 40 },
+      { id: "A5", label: "A", short: "A", midi: 45 },
+      { id: "D4", label: "D", short: "D", midi: 50 },
+      { id: "G3", label: "G", short: "G", midi: 55 },
+      { id: "B2", label: "B", short: "B", midi: 59 },
+      { id: "E1", label: "E aguda", short: "E", midi: 64 }
+    ];
+
+    let settings = {
+      activeStrings: strings.map(s => s.id),
+      fretCount: 12,
+      toleranceCents: 35
+    };
+
+    let normalTarget = null;
+    let simTarget = null;
+    let normalHits = 0;
+    let normalAttempts = 0;
+    let simHits = 0;
+    let simAttempts = 0;
+    let answerVisible = false;
+
+    let audioContext = null;
+    let analyser = null;
+    let micStream = null;
+    let animationId = null;
+    let stableCorrectCount = 0;
+    let canScoreNormal = true;
+
+    loadSettings();
+    renderSettings();
+    renderFretboard();
+    newNormalChallenge(false);
+    newSimChallenge(false);
+
+    function showScreen(id) {
+      document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
+      document.getElementById(id).classList.add("active");
+      if (id === "simulation") renderFretboard();
+    }
+
+    function loadSettings() {
+      const saved = localStorage.getItem("guitarNoteTrainerSettings");
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          settings = {
+            activeStrings: Array.isArray(parsed.activeStrings) && parsed.activeStrings.length ? parsed.activeStrings : strings.map(s => s.id),
+            fretCount: Number(parsed.fretCount || 12),
+            toleranceCents: Number(parsed.toleranceCents || 35)
+          };
+        } catch (_) {}
+      }
+    }
+
+    function saveSettings() {
+      const active = [...document.querySelectorAll(".stringCheck:checked")].map(x => x.value);
+      if (active.length === 0) {
+        alert("Selecione pelo menos uma corda.");
+        return;
+      }
+
+      settings.activeStrings = active;
+      settings.fretCount = clamp(Number(document.getElementById("fretCount").value), 5, 24);
+      settings.toleranceCents = clamp(Number(document.getElementById("toleranceCents").value), 10, 80);
+
+      localStorage.setItem("guitarNoteTrainerSettings", JSON.stringify(settings));
+
+      renderFretboard();
+      newNormalChallenge(false);
+      newSimChallenge(false);
+
+      alert("Configurações salvas.");
+    }
+
+    function renderSettings() {
+      const box = document.getElementById("stringConfig");
+      box.innerHTML = "";
+
+      strings.forEach(s => {
+        const label = document.createElement("label");
+        label.className = "check";
+        label.innerHTML = `
+          <input class="stringCheck" type="checkbox" value="${s.id}" ${settings.activeStrings.includes(s.id) ? "checked" : ""}>
+          <span>${s.label}</span>
+        `;
+        box.appendChild(label);
+      });
+
+      document.getElementById("fretCount").value = settings.fretCount;
+      document.getElementById("toleranceCents").value = settings.toleranceCents;
+    }
+
+    function getActiveStrings() {
+      return strings.filter(s => settings.activeStrings.includes(s.id));
+    }
+
+    function randomChallenge() {
+      const active = getActiveStrings();
+      const string = active[Math.floor(Math.random() * active.length)];
+      const fret = Math.floor(Math.random() * (settings.fretCount + 1));
+      const midi = string.midi + fret;
+      const note = midiToNoteName(midi);
+      const freq = midiToFreq(midi);
+
+      return { string, fret, midi, note, freq };
+    }
+
+    function newNormalChallenge(resetScoreLock = true) {
+      normalTarget = randomChallenge();
+      canScoreNormal = true;
+      stableCorrectCount = 0;
+
+      document.getElementById("normalString").textContent = normalTarget.string.label;
+      document.getElementById("normalNote").textContent = normalTarget.note;
+      document.getElementById("normalStatus").className = "status warnText";
+      document.getElementById("normalStatus").textContent = resetScoreLock
+        ? "Toque a nota indicada."
+        : "Pronto para começar.";
+    }
+
+    function newSimChallenge(resetResult = true) {
+      simTarget = randomChallenge();
+      answerVisible = false;
+
+      document.getElementById("simString").textContent = simTarget.string.label;
+      document.getElementById("simNote").textContent = simTarget.note;
+      document.getElementById("simResult").textContent = "-";
+
+      const status = document.getElementById("simStatus");
+      status.className = "status warnText";
+      status.textContent = resetResult ? "Clique no traste correto." : "Pronto para começar.";
+
+      renderFretboard();
+    }
+
+    async function startMic() {
+      if (animationId) return;
+
+      try {
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const source = audioContext.createMediaStreamSource(micStream);
+
+        analyser = audioContext.createAnalyser();
+        analyser.fftSize = 2048;
+        source.connect(analyser);
+
+        document.getElementById("normalStatus").className = "status warnText";
+        document.getElementById("normalStatus").textContent = "Microfone ativo. Toque a nota indicada.";
+
+        listenPitch();
+      } catch (err) {
+        document.getElementById("normalStatus").className = "status badText";
+        document.getElementById("normalStatus").textContent = "Não consegui acessar o microfone. Verifique permissão, HTTPS ou localhost.";
+      }
+    }
+
+    function stopMic() {
+      if (animationId) cancelAnimationFrame(animationId);
+      animationId = null;
+
+      if (micStream) {
+        micStream.getTracks().forEach(t => t.stop());
+        micStream = null;
+      }
+
+      if (audioContext) {
+        audioContext.close();
+        audioContext = null;
+      }
+
+      analyser = null;
+      stableCorrectCount = 0;
+
+      document.getElementById("normalStatus").className = "status warnText";
+      document.getElementById("normalStatus").textContent = "Microfone parado.";
+      document.getElementById("detectedNote").textContent = "-";
+      document.getElementById("detectedFreq").textContent = "-";
+    }
+
+    function listenPitch() {
+      const buffer = new Float32Array(analyser.fftSize);
+      analyser.getFloatTimeDomainData(buffer);
+
+      const pitch = autoCorrelate(buffer, audioContext.sampleRate);
+
+      if (pitch !== -1) {
+        const detectedMidi = freqToMidi(pitch);
+        const detectedNote = midiToNoteName(detectedMidi);
+        const cents = centsDifference(pitch, normalTarget.freq);
+
+        document.getElementById("detectedNote").textContent = detectedNote;
+        document.getElementById("detectedFreq").textContent = `${pitch.toFixed(1)} Hz`;
+
+        const exactEnough = Math.abs(cents) <= settings.toleranceCents;
+
+        if (exactEnough && canScoreNormal) {
+          stableCorrectCount++;
+          document.getElementById("normalStatus").className = "status okText";
+          document.getElementById("normalStatus").textContent = `Correto! Segure um pouco... (${stableCorrectCount}/3)`;
+
+          if (stableCorrectCount >= 3) {
+            normalHits++;
+            normalAttempts++;
+            canScoreNormal = false;
+            updateNormalScore();
+
+            document.getElementById("normalStatus").className = "status okText";
+            document.getElementById("normalStatus").textContent = `Acertou: ${normalTarget.note} na corda ${normalTarget.string.label}, traste ${normalTarget.fret}.`;
+
+            setTimeout(() => newNormalChallenge(true), 900);
+          }
+        } else {
+          stableCorrectCount = 0;
+
+          if (canScoreNormal) {
+            document.getElementById("normalStatus").className = "status warnText";
+            document.getElementById("normalStatus").textContent = `Ouvindo... alvo: ${normalTarget.note} / ${normalTarget.freq.toFixed(1)} Hz`;
+          }
+        }
+      } else {
+        document.getElementById("detectedNote").textContent = "-";
+        document.getElementById("detectedFreq").textContent = "-";
+      }
+
+      animationId = requestAnimationFrame(listenPitch);
+    }
+
+    function renderFretboard() {
+      const board = document.getElementById("fretboard");
+      const nums = document.getElementById("fretNumbers");
+
+      board.style.setProperty("--frets", settings.fretCount + 1);
+      nums.style.setProperty("--frets", settings.fretCount + 1);
+
+      board.innerHTML = "";
+      nums.innerHTML = "";
+
+      const spacer = document.createElement("div");
+      spacer.textContent = "Corda";
+      nums.appendChild(spacer);
+
+      for (let f = 0; f <= settings.fretCount; f++) {
+        const n = document.createElement("div");
+        n.textContent = f === 0 ? "Solta" : f;
+        nums.appendChild(n);
+      }
+
+      strings.forEach(s => {
+        const label = document.createElement("div");
+        label.className = "string-label";
+        label.textContent = s.label;
+        board.appendChild(label);
+
+        for (let fret = 0; fret <= settings.fretCount; fret++) {
+          const cell = document.createElement("div");
+          cell.className = "cell";
+
+          if (!settings.activeStrings.includes(s.id)) {
+            cell.classList.add("disabled-string");
+          }
+
+          const midi = s.midi + fret;
+          const note = midiToNoteName(midi);
+          const dot = document.createElement("div");
+          dot.className = "dot";
+          dot.textContent = note;
+          cell.appendChild(dot);
+
+          if (
+            answerVisible &&
+            simTarget &&
+            s.id === simTarget.string.id &&
+            fret === simTarget.fret
+          ) {
+            cell.classList.add("show-answer");
+          }
+
+          cell.onclick = () => handleFretClick(cell, s, fret);
+          board.appendChild(cell);
+        }
+      });
+    }
+
+    function handleFretClick(cell, string, fret) {
+      if (!simTarget || !settings.activeStrings.includes(string.id)) return;
+
+      simAttempts++;
+
+      const correct = string.id === simTarget.string.id && fret === simTarget.fret;
+      const status = document.getElementById("simStatus");
+      const result = document.getElementById("simResult");
+
+      if (correct) {
+        simHits++;
+        result.textContent = "✓";
+        cell.classList.add("correct");
+        status.className = "status okText";
+        status.textContent = `Correto: ${simTarget.note} na corda ${simTarget.string.label}, traste ${simTarget.fret}.`;
+
+        setTimeout(() => newSimChallenge(true), 800);
+      } else {
+        result.textContent = "✗";
+        cell.classList.add("wrong");
+        status.className = "status badText";
+        status.textContent = `Ainda não. Você clicou na corda ${string.label}, traste ${fret}.`;
+        setTimeout(() => cell.classList.remove("wrong"), 500);
+      }
+
+      updateSimScore();
+    }
+
+    function toggleAnswer() {
+      answerVisible = !answerVisible;
+      renderFretboard();
+    }
+
+    function updateNormalScore() {
+      document.getElementById("normalHits").textContent = normalHits;
+      document.getElementById("normalAttempts").textContent = normalAttempts;
+    }
+
+    function updateSimScore() {
+      document.getElementById("simHits").textContent = simHits;
+      document.getElementById("simAttempts").textContent = simAttempts;
+    }
+
+    function midiToFreq(midi) {
+      return 440 * Math.pow(2, (midi - 69) / 12);
+    }
+
+    function freqToMidi(freq) {
+      return Math.round(69 + 12 * Math.log2(freq / 440));
+    }
+
+    function midiToNoteName(midi) {
+      return noteNames[((midi % 12) + 12) % 12];
+    }
+
+    function centsDifference(freq, targetFreq) {
+      return 1200 * Math.log2(freq / targetFreq);
+    }
+
+    function clamp(value, min, max) {
+      return Math.max(min, Math.min(max, value));
+    }
+
+    // Autocorrelação simples para detectar frequência fundamental.
+    // Funciona bem para treino básico, mas pode variar conforme microfone, ruído e timbre.
+    function autoCorrelate(buffer, sampleRate) {
+      let size = buffer.length;
+      let rms = 0;
+
+      for (let i = 0; i < size; i++) {
+        rms += buffer[i] * buffer[i];
+      }
+
+      rms = Math.sqrt(rms / size);
+
+      if (rms < 0.015) return -1;
+
+      let r1 = 0;
+      let r2 = size - 1;
+      const threshold = 0.2;
+
+      for (let i = 0; i < size / 2; i++) {
+        if (Math.abs(buffer[i]) < threshold) {
+          r1 = i;
+          break;
+        }
+      }
+
+      for (let i = 1; i < size / 2; i++) {
+        if (Math.abs(buffer[size - i]) < threshold) {
+          r2 = size - i;
+          break;
+        }
+      }
+
+      buffer = buffer.slice(r1, r2);
+      size = buffer.length;
+
+      const correlations = new Array(size).fill(0);
+
+      for (let lag = 0; lag < size; lag++) {
+        for (let i = 0; i < size - lag; i++) {
+          correlations[lag] += buffer[i] * buffer[i + lag];
+        }
+      }
+
+      let d = 0;
+      while (correlations[d] > correlations[d + 1]) d++;
+
+      let maxVal = -1;
+      let maxPos = -1;
+
+      for (let i = d; i < size; i++) {
+        if (correlations[i] > maxVal) {
+          maxVal = correlations[i];
+          maxPos = i;
+        }
+      }
+
+      if (maxPos <= 0) return -1;
+
+      const x1 = correlations[maxPos - 1] || 0;
+      const x2 = correlations[maxPos];
+      const x3 = correlations[maxPos + 1] || 0;
+      const a = (x1 + x3 - 2 * x2) / 2;
+      const b = (x3 - x1) / 2;
+
+      if (a) maxPos = maxPos - b / (2 * a);
+
+      const frequency = sampleRate / maxPos;
+
+      if (frequency < 60 || frequency > 1400) return -1;
+
+      return frequency;
+    }
+  </script>
+</body>
+</html>
