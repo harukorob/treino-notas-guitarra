@@ -336,6 +336,107 @@
       font-weight: 700;
     }
 
+
+    .session-bar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      width: 100%;
+      margin-top: 6px;
+      padding: 12px;
+      border-radius: 16px;
+      background: rgba(17,24,39,.58);
+      border: 1px solid rgba(255,255,255,.08);
+    }
+
+    .session-timer {
+      font-size: 22px;
+      font-weight: 900;
+      color: var(--accent);
+      letter-spacing: .04em;
+      padding: 8px 12px;
+      border-radius: 999px;
+      background: rgba(56,189,248,.12);
+      border: 1px solid rgba(56,189,248,.24);
+    }
+
+    .session-info {
+      color: var(--muted);
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .dashboard-actions {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      align-items: center;
+      margin: 12px 0 16px;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border-radius: 16px;
+      border: 1px solid rgba(255,255,255,.08);
+      background: rgba(17,24,39,.45);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      min-width: 760px;
+    }
+
+    th, td {
+      padding: 13px 14px;
+      text-align: left;
+      border-bottom: 1px solid rgba(255,255,255,.08);
+      white-space: nowrap;
+    }
+
+    th {
+      color: var(--accent);
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+      background: rgba(17,24,39,.65);
+    }
+
+    tbody tr:hover {
+      background: rgba(56,189,248,.06);
+    }
+
+    .empty-state {
+      color: var(--muted);
+      text-align: center;
+      padding: 18px;
+      font-weight: 700;
+    }
+
+    .chart-card {
+      margin-top: 18px;
+      background: rgba(17, 24, 39, .6);
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 16px;
+      padding: 16px;
+    }
+
+    .chart-card h3 {
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: .08em;
+    }
+
+    canvas {
+      width: 100%;
+      max-width: 100%;
+      height: 320px;
+      display: block;
+    }
+
     @media (max-width: 780px) {
       .grid {
         grid-template-columns: 1fr;
@@ -362,7 +463,14 @@
       <div class="nav">
         <button class="primary" onclick="showScreen('normal')">Modo Normal</button>
         <button class="primary" onclick="showScreen('simulation')">Modo Simulação</button>
+        <button onclick="showScreen('dashboard')">Dashboard</button>
         <button onclick="showScreen('settings')">Configurações</button>
+      </div>
+
+      <div class="session-bar">
+        <button id="sessionButton" class="ok" onclick="toggleSession()">Iniciar Sessão</button>
+        <div id="sessionTimer" class="session-timer">00:00:00</div>
+        <div id="sessionInfo" class="session-info">Sessão não iniciada.</div>
       </div>
     </header>
 
@@ -442,6 +550,37 @@
       </div>
     </section>
 
+    <section id="dashboard" class="screen">
+      <h2>Dashboard</h2>
+      <p class="small">
+        Histórico das sessões salvas nos cookies deste navegador. Cada linha é registrada ao clicar em <b>Encerrar sessão</b>.
+      </p>
+
+      <div class="dashboard-actions">
+        <button class="primary" onclick="renderDashboard()">Atualizar dashboard</button>
+        <button class="bad" onclick="clearSessionHistory()">Limpar histórico</button>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Data atual</th>
+              <th>Duração da sessão</th>
+              <th>Qtde Notas</th>
+              <th>Tempo Médio Acerto (ss)</th>
+            </tr>
+          </thead>
+          <tbody id="historyTableBody"></tbody>
+        </table>
+      </div>
+
+      <div class="chart-card">
+        <h3>Tempo Médio de Acerto por Sessão</h3>
+        <canvas id="avgTimeChart" width="1100" height="320"></canvas>
+      </div>
+    </section>
+
     <section id="settings" class="screen">
       <h2>Configurações</h2>
       <p class="small">Selecione quais cordas participarão dos desafios. A afinação padrão usada é E A D G B E.</p>
@@ -494,6 +633,17 @@
     let simAttempts = 0;
     let answerVisible = false;
 
+    const historyCookieName = "guitarNoteTrainerSessionHistory";
+    let session = {
+      active: false,
+      start: null,
+      startLabel: "",
+      notes: 0,
+      totalHitMs: 0,
+      currentChallengeStart: null,
+      timerId: null
+    };
+
     let audioContext = null;
     let analyser = null;
     let micStream = null;
@@ -506,11 +656,13 @@
     renderFretboard();
     newNormalChallenge(false);
     newSimChallenge(false);
+    renderDashboard();
 
     function showScreen(id) {
       document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
       document.getElementById(id).classList.add("active");
       if (id === "simulation") renderFretboard();
+      if (id === "dashboard") renderDashboard();
     }
 
     function loadSettings() {
@@ -583,6 +735,7 @@
 
     function newNormalChallenge(resetScoreLock = true) {
       normalTarget = randomChallenge();
+      markChallengeStart();
       canScoreNormal = true;
       stableCorrectCount = 0;
 
@@ -596,6 +749,7 @@
 
     function newSimChallenge(resetResult = true) {
       simTarget = randomChallenge();
+      markChallengeStart();
       answerVisible = false;
 
       document.getElementById("simString").textContent = simTarget.string.label;
@@ -676,6 +830,7 @@
           document.getElementById("normalStatus").textContent = `Correto! Segure um pouco... (${stableCorrectCount}/3)`;
 
           if (stableCorrectCount >= 3) {
+            recordNoteHit();
             normalHits++;
             normalAttempts++;
             canScoreNormal = false;
@@ -768,6 +923,7 @@
       const result = document.getElementById("simResult");
 
       if (correct) {
+        recordNoteHit();
         simHits++;
         result.textContent = "✓";
         cell.classList.add("correct");
@@ -799,6 +955,287 @@
     function updateSimScore() {
       document.getElementById("simHits").textContent = simHits;
       document.getElementById("simAttempts").textContent = simAttempts;
+    }
+
+
+    function toggleSession() {
+      if (session.active) {
+        endSession();
+      } else {
+        startSession();
+      }
+    }
+
+    function startSession() {
+      const now = new Date();
+      session.active = true;
+      session.start = now;
+      session.startLabel = formatDateTimeUS(now);
+      session.notes = 0;
+      session.totalHitMs = 0;
+      session.currentChallengeStart = performance.now();
+
+      const btn = document.getElementById("sessionButton");
+      btn.textContent = "Encerrar sessão";
+      btn.className = "bad";
+
+      document.getElementById("sessionInfo").textContent = `Sessão iniciada em ${session.startLabel}. Notas treinadas: 0.`;
+      updateSessionTimer();
+      session.timerId = setInterval(updateSessionTimer, 1000);
+    }
+
+    function endSession() {
+      if (!session.active) return;
+
+      const durationMs = new Date() - session.start;
+      const avgSeconds = session.notes ? (session.totalHitMs / session.notes / 1000) : 0;
+
+      const history = getSessionHistory();
+      history.push({
+        startedAt: session.startLabel,
+        duration: formatDurationHHmm(durationMs),
+        durationSeconds: Math.round(durationMs / 1000),
+        notes: session.notes,
+        avgHitSeconds: Number(avgSeconds.toFixed(2))
+      });
+
+      setSessionHistory(history.slice(-25));
+
+      session.active = false;
+      session.start = null;
+      session.currentChallengeStart = null;
+
+      if (session.timerId) clearInterval(session.timerId);
+      session.timerId = null;
+
+      const btn = document.getElementById("sessionButton");
+      btn.textContent = "Iniciar Sessão";
+      btn.className = "ok";
+
+      document.getElementById("sessionTimer").textContent = "00:00:00";
+      document.getElementById("sessionInfo").textContent = `Sessão encerrada e salva. Notas: ${history[history.length - 1].notes}. Média: ${history[history.length - 1].avgHitSeconds.toFixed(2)}s.`;
+      renderDashboard();
+    }
+
+    function markChallengeStart() {
+      if (session.active) {
+        session.currentChallengeStart = performance.now();
+      }
+    }
+
+    function recordNoteHit() {
+      if (!session.active) return;
+
+      const now = performance.now();
+      const elapsed = session.currentChallengeStart ? now - session.currentChallengeStart : 0;
+
+      session.notes++;
+      session.totalHitMs += elapsed;
+      session.currentChallengeStart = now;
+
+      const avgSeconds = session.totalHitMs / session.notes / 1000;
+      document.getElementById("sessionInfo").textContent = `Sessão ativa. Notas treinadas: ${session.notes}. Média atual: ${avgSeconds.toFixed(2)}s.`;
+    }
+
+    function updateSessionTimer() {
+      if (!session.active || !session.start) return;
+      document.getElementById("sessionTimer").textContent = formatDurationHHmmss(new Date() - session.start);
+    }
+
+    function getSessionHistory() {
+      const cookie = getCookie(historyCookieName);
+      if (!cookie) return [];
+
+      try {
+        const parsed = JSON.parse(decodeURIComponent(cookie));
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (_) {
+        return [];
+      }
+    }
+
+    function setSessionHistory(history) {
+      const value = encodeURIComponent(JSON.stringify(history));
+      const maxAge = 60 * 60 * 24 * 365;
+      document.cookie = `${historyCookieName}=${value}; max-age=${maxAge}; path=/; SameSite=Lax`;
+    }
+
+    function getCookie(name) {
+      const prefix = `${name}=`;
+      const parts = document.cookie.split("; ");
+      const found = parts.find(part => part.startsWith(prefix));
+      return found ? found.slice(prefix.length) : "";
+    }
+
+    function clearSessionHistory() {
+      const ok = confirm("Deseja apagar todo o histórico de sessões deste navegador?");
+      if (!ok) return;
+
+      document.cookie = `${historyCookieName}=; max-age=0; path=/; SameSite=Lax`;
+      renderDashboard();
+    }
+
+    function renderDashboard() {
+      const tbody = document.getElementById("historyTableBody");
+      const canvas = document.getElementById("avgTimeChart");
+      if (!tbody || !canvas) return;
+
+      const history = getSessionHistory();
+      tbody.innerHTML = "";
+
+      if (!history.length) {
+        const row = document.createElement("tr");
+        row.innerHTML = `<td class="empty-state" colspan="4">Nenhuma sessão registrada ainda.</td>`;
+        tbody.appendChild(row);
+        drawAvgTimeChart([]);
+        return;
+      }
+
+      history.slice().reverse().forEach(item => {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td>${item.startedAt || "-"}</td>
+          <td>${item.duration || "00:00"}</td>
+          <td>${item.notes ?? 0}</td>
+          <td>${Number(item.avgHitSeconds || 0).toFixed(2)}</td>
+        `;
+        tbody.appendChild(row);
+      });
+
+      drawAvgTimeChart(history);
+    }
+
+    function drawAvgTimeChart(history) {
+      const canvas = document.getElementById("avgTimeChart");
+      if (!canvas) return;
+
+      const ctx = canvas.getContext("2d");
+      const width = canvas.width;
+      const height = canvas.height;
+      const pad = { left: 58, right: 24, top: 24, bottom: 54 };
+
+      ctx.clearRect(0, 0, width, height);
+
+      const chartW = width - pad.left - pad.right;
+      const chartH = height - pad.top - pad.bottom;
+
+      ctx.fillStyle = "rgba(17,24,39,.35)";
+      ctx.fillRect(0, 0, width, height);
+
+      ctx.strokeStyle = "rgba(255,255,255,.10)";
+      ctx.lineWidth = 1;
+      ctx.fillStyle = "rgba(249,250,251,.72)";
+      ctx.font = "12px Arial";
+
+      for (let i = 0; i <= 4; i++) {
+        const y = pad.top + (chartH / 4) * i;
+        ctx.beginPath();
+        ctx.moveTo(pad.left, y);
+        ctx.lineTo(width - pad.right, y);
+        ctx.stroke();
+      }
+
+      if (!history.length) {
+        ctx.fillStyle = "rgba(156,163,175,.95)";
+        ctx.font = "700 18px Arial";
+        ctx.textAlign = "center";
+        ctx.fillText("Sem dados para exibir", width / 2, height / 2);
+        return;
+      }
+
+      const values = history.map(item => Number(item.avgHitSeconds || 0));
+      const max = Math.max(...values, 1);
+      const min = 0;
+      const range = max - min || 1;
+      const points = values.map((value, index) => {
+        const x = history.length === 1 ? pad.left + chartW / 2 : pad.left + (chartW / (history.length - 1)) * index;
+        const y = pad.top + chartH - ((value - min) / range) * chartH;
+        return { x, y, value, label: history[index].startedAt };
+      });
+
+      ctx.textAlign = "right";
+      ctx.fillStyle = "rgba(156,163,175,.95)";
+      for (let i = 0; i <= 4; i++) {
+        const value = max - (max / 4) * i;
+        const y = pad.top + (chartH / 4) * i + 4;
+        ctx.fillText(`${value.toFixed(1)}s`, pad.left - 10, y);
+      }
+
+      const gradient = ctx.createLinearGradient(0, pad.top, 0, height - pad.bottom);
+      gradient.addColorStop(0, "rgba(56,189,248,.38)");
+      gradient.addColorStop(1, "rgba(56,189,248,.02)");
+
+      ctx.beginPath();
+      points.forEach((point, index) => {
+        if (index === 0) ctx.moveTo(point.x, point.y);
+        else ctx.lineTo(point.x, point.y);
+      });
+      ctx.lineTo(points[points.length - 1].x, height - pad.bottom);
+      ctx.lineTo(points[0].x, height - pad.bottom);
+      ctx.closePath();
+      ctx.fillStyle = gradient;
+      ctx.fill();
+
+      ctx.beginPath();
+      points.forEach((point, index) => {
+        if (index === 0) ctx.moveTo(point.x, point.y);
+        else ctx.lineTo(point.x, point.y);
+      });
+      ctx.strokeStyle = "rgba(56,189,248,.95)";
+      ctx.lineWidth = 3;
+      ctx.stroke();
+
+      points.forEach(point => {
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, 5, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(56,189,248,1)";
+        ctx.fill();
+        ctx.strokeStyle = "rgba(8,47,73,1)";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      });
+
+      const labelIndexes = getLabelIndexes(history.length);
+      ctx.textAlign = "center";
+      ctx.fillStyle = "rgba(156,163,175,.95)";
+      ctx.font = "12px Arial";
+      labelIndexes.forEach(i => {
+        const point = points[i];
+        const label = String(point.label || "").slice(0, 10);
+        ctx.fillText(label, point.x, height - 24);
+      });
+    }
+
+    function getLabelIndexes(length) {
+      if (length <= 6) return Array.from({ length }, (_, i) => i);
+      const indexes = new Set([0, length - 1]);
+      const step = Math.ceil(length / 5);
+      for (let i = step; i < length - 1; i += step) indexes.add(i);
+      return [...indexes].sort((a, b) => a - b);
+    }
+
+    function formatDateTimeUS(date) {
+      const mm = String(date.getMonth() + 1).padStart(2, "0");
+      const dd = String(date.getDate()).padStart(2, "0");
+      const yyyy = date.getFullYear();
+      const hh = String(date.getHours()).padStart(2, "0");
+      const min = String(date.getMinutes()).padStart(2, "0");
+      return `${mm}/${dd}/${yyyy} ${hh}:${min}`;
+    }
+
+    function formatDurationHHmm(ms) {
+      const totalMinutes = Math.floor(ms / 60000);
+      const hours = Math.floor(totalMinutes / 60);
+      const minutes = totalMinutes % 60;
+      return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+    }
+
+    function formatDurationHHmmss(ms) {
+      const totalSeconds = Math.floor(ms / 1000);
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
     }
 
     function midiToFreq(midi) {
