@@ -430,14 +430,104 @@
       letter-spacing: .08em;
     }
 
-    canvas {
+    .chart-scroll {
       width: 100%;
-      max-width: 100%;
-      height: 320px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding-bottom: 8px;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .chart-scroll::-webkit-scrollbar {
+      height: 8px;
+    }
+
+    .chart-scroll::-webkit-scrollbar-thumb {
+      background: rgba(56,189,248,.35);
+      border-radius: 999px;
+    }
+
+    canvas {
       display: block;
+      max-width: none;
+      border-radius: 12px;
+    }
+
+    .mobile-chart-hint {
+      display: none;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+
+    .mic-panel {
+      display: grid;
+      grid-template-columns: minmax(180px, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      margin-top: 12px;
+      padding: 12px;
+      border-radius: 16px;
+      background: rgba(17,24,39,.45);
+      border: 1px solid rgba(255,255,255,.08);
+    }
+
+    .meter-label {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 7px;
+    }
+
+    .meter-track {
+      height: 12px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: rgba(255,255,255,.08);
+      border: 1px solid rgba(255,255,255,.08);
+    }
+
+    .meter-fill {
+      width: 0%;
+      height: 100%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, var(--accent), var(--ok));
+      transition: width .08s linear;
+    }
+
+    .quality-chip {
+      min-width: 155px;
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 900;
+      padding: 9px 12px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.06);
+      border: 1px solid rgba(255,255,255,.08);
+    }
+
+    .settings-note {
+      width: 100%;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
     }
 
     @media (max-width: 780px) {
+      .app {
+        padding: 14px;
+      }
+
+      .screen {
+        padding: 14px;
+      }
+
       .grid {
         grid-template-columns: 1fr;
       }
@@ -448,6 +538,14 @@
 
       header {
         align-items: flex-start;
+      }
+
+      .chart-card {
+        padding: 12px;
+      }
+
+      .mobile-chart-hint {
+        display: block;
       }
     }
   </style>
@@ -500,6 +598,18 @@
         <div class="pill">Acertos: <span id="normalHits">0</span></div>
         <div class="pill">Tentativas: <span id="normalAttempts">0</span></div>
         <div class="pill">Frequência: <span id="detectedFreq">-</span></div>
+        <div class="pill">Precisão: <span id="detectedCents">-</span></div>
+      </div>
+
+      <div class="mic-panel">
+        <div>
+          <div class="meter-label">
+            <span>Volume do microfone</span>
+            <span id="micVolumeText">-</span>
+          </div>
+          <div class="meter-track"><div id="micVolumeFill" class="meter-fill"></div></div>
+        </div>
+        <div id="pitchQuality" class="quality-chip">Aguardando microfone</div>
       </div>
 
       <div id="normalStatus" class="status warnText">Clique em “Iniciar microfone”.</div>
@@ -577,7 +687,10 @@
 
       <div class="chart-card">
         <h3>Tempo Médio de Acerto por Sessão</h3>
-        <canvas id="avgTimeChart" width="1100" height="320"></canvas>
+        <div class="chart-scroll" id="avgTimeChartScroll">
+          <canvas id="avgTimeChart"></canvas>
+        </div>
+        <div class="mobile-chart-hint">No celular, arraste o gráfico para o lado para ver todas as sessões.</div>
       </div>
     </section>
 
@@ -598,7 +711,26 @@
           <input id="toleranceCents" type="number" min="10" max="80" value="35" />
         </label>
 
+        <label>
+          Sensibilidade do microfone:
+          <input id="micSensitivity" type="number" min="1" max="100" value="35" />
+        </label>
+
+        <label>
+          Estabilidade para acerto:
+          <input id="stabilityFrames" type="number" min="3" max="10" value="5" />
+        </label>
+
+        <label>
+          Ignorar ataque inicial (ms):
+          <input id="attackIgnoreMs" type="number" min="0" max="400" step="25" value="150" />
+        </label>
+
         <button class="primary" onclick="saveSettings()">Salvar configurações</button>
+        <button onclick="calibrateMicNoise()">Calibrar ruído ambiente</button>
+        <div class="settings-note">
+          A calibração mede o ruído do ambiente por alguns segundos e ajusta automaticamente a sensibilidade mínima. Faça isso com a guitarra em silêncio.
+        </div>
       </div>
 
       <p class="small">
@@ -622,7 +754,10 @@
     let settings = {
       activeStrings: strings.map(s => s.id),
       fretCount: 12,
-      toleranceCents: 35
+      toleranceCents: 35,
+      micSensitivity: 35,
+      stabilityFrames: 5,
+      attackIgnoreMs: 150
     };
 
     let normalTarget = null;
@@ -650,6 +785,10 @@
     let animationId = null;
     let stableCorrectCount = 0;
     let canScoreNormal = true;
+    let pitchHistory = [];
+    let lastCandidateNote = null;
+    let noteFirstSeenAt = 0;
+    let noiseFloorRms = 0.012;
 
     loadSettings();
     renderSettings();
@@ -657,6 +796,11 @@
     newNormalChallenge(false);
     newSimChallenge(false);
     renderDashboard();
+    window.addEventListener("resize", () => {
+      if (document.getElementById("dashboard")?.classList.contains("active")) {
+        renderDashboard();
+      }
+    });
 
     function showScreen(id) {
       document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
@@ -673,7 +817,10 @@
           settings = {
             activeStrings: Array.isArray(parsed.activeStrings) && parsed.activeStrings.length ? parsed.activeStrings : strings.map(s => s.id),
             fretCount: Number(parsed.fretCount || 12),
-            toleranceCents: Number(parsed.toleranceCents || 35)
+            toleranceCents: Number(parsed.toleranceCents || 35),
+            micSensitivity: Number(parsed.micSensitivity || 35),
+            stabilityFrames: Number(parsed.stabilityFrames || 5),
+            attackIgnoreMs: Number(parsed.attackIgnoreMs ?? 150)
           };
         } catch (_) {}
       }
@@ -689,6 +836,10 @@
       settings.activeStrings = active;
       settings.fretCount = clamp(Number(document.getElementById("fretCount").value), 5, 24);
       settings.toleranceCents = clamp(Number(document.getElementById("toleranceCents").value), 10, 80);
+      settings.micSensitivity = clamp(Number(document.getElementById("micSensitivity").value), 1, 100);
+      settings.stabilityFrames = clamp(Number(document.getElementById("stabilityFrames").value), 3, 10);
+      settings.attackIgnoreMs = clamp(Number(document.getElementById("attackIgnoreMs").value), 0, 400);
+      noiseFloorRms = sensitivityToRms(settings.micSensitivity);
 
       localStorage.setItem("guitarNoteTrainerSettings", JSON.stringify(settings));
 
@@ -715,6 +866,10 @@
 
       document.getElementById("fretCount").value = settings.fretCount;
       document.getElementById("toleranceCents").value = settings.toleranceCents;
+      document.getElementById("micSensitivity").value = settings.micSensitivity;
+      document.getElementById("stabilityFrames").value = settings.stabilityFrames;
+      document.getElementById("attackIgnoreMs").value = settings.attackIgnoreMs;
+      noiseFloorRms = sensitivityToRms(settings.micSensitivity);
     }
 
     function getActiveStrings() {
@@ -738,6 +893,9 @@
       markChallengeStart();
       canScoreNormal = true;
       stableCorrectCount = 0;
+      pitchHistory = [];
+      lastCandidateNote = null;
+      noteFirstSeenAt = 0;
 
       document.getElementById("normalString").textContent = normalTarget.string.label;
       document.getElementById("normalNote").textContent = normalTarget.noteFull;
@@ -767,16 +925,30 @@
       if (animationId) return;
 
       try {
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        micStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false
+          }
+        });
         audioContext = new (window.AudioContext || window.webkitAudioContext)();
         const source = audioContext.createMediaStreamSource(micStream);
 
         analyser = audioContext.createAnalyser();
-        analyser.fftSize = 2048;
+        analyser.fftSize = 4096;
+        analyser.smoothingTimeConstant = 0.08;
         source.connect(analyser);
 
+        pitchHistory = [];
+        stableCorrectCount = 0;
+        lastCandidateNote = null;
+        noteFirstSeenAt = 0;
+        noiseFloorRms = sensitivityToRms(settings.micSensitivity);
+
         document.getElementById("normalStatus").className = "status warnText";
-        document.getElementById("normalStatus").textContent = "Microfone ativo. Toque a nota indicada.";
+        document.getElementById("normalStatus").textContent = "Microfone ativo. Toque a nota indicada com som limpo e deixe a nota estabilizar.";
+        updateMicMeter(0, "Aguardando nota", "-");
 
         listenPitch();
       } catch (err) {
@@ -801,57 +973,107 @@
 
       analyser = null;
       stableCorrectCount = 0;
+      pitchHistory = [];
+      lastCandidateNote = null;
+      noteFirstSeenAt = 0;
 
       document.getElementById("normalStatus").className = "status warnText";
       document.getElementById("normalStatus").textContent = "Microfone parado.";
       document.getElementById("detectedNote").textContent = "-";
       document.getElementById("detectedFreq").textContent = "-";
+      document.getElementById("detectedCents").textContent = "-";
+      updateMicMeter(0, "Aguardando microfone", "-");
     }
 
     function listenPitch() {
+      if (!analyser || !audioContext || !normalTarget) return;
+
       const buffer = new Float32Array(analyser.fftSize);
       analyser.getFloatTimeDomainData(buffer);
 
-      const pitch = autoCorrelate(buffer, audioContext.sampleRate);
+      const rms = getRms(buffer);
+      updateMicMeter(rms, rms < noiseFloorRms ? "Sinal baixo" : "Analisando", `${Math.round(rms * 1000)}`);
 
-      if (pitch !== -1) {
-        const detectedMidi = freqToMidi(pitch);
-        const detectedNote = midiToNoteWithOctave(detectedMidi);
-        const cents = centsDifference(pitch, normalTarget.freq);
+      if (rms < noiseFloorRms) {
+        resetPitchTracking();
+        document.getElementById("detectedNote").textContent = "-";
+        document.getElementById("detectedFreq").textContent = "-";
+        document.getElementById("detectedCents").textContent = "-";
+        if (canScoreNormal) {
+          document.getElementById("normalStatus").className = "status warnText";
+          document.getElementById("normalStatus").textContent = "Sinal baixo. Toque mais perto do microfone ou calibre a sensibilidade.";
+        }
+        animationId = requestAnimationFrame(listenPitch);
+        return;
+      }
 
-        document.getElementById("detectedNote").textContent = detectedNote;
-        document.getElementById("detectedFreq").textContent = `${pitch.toFixed(1)} Hz`;
+      const pitchData = detectPitchYin(buffer, audioContext.sampleRate);
+      const fallbackPitch = pitchData.pitch === -1 ? autoCorrelate(buffer, audioContext.sampleRate, noiseFloorRms) : -1;
+      const pitch = pitchData.pitch !== -1 ? pitchData.pitch : fallbackPitch;
+      const confidence = pitchData.confidence || (fallbackPitch !== -1 ? 0.55 : 0);
 
-        const exactEnough = Math.abs(cents) <= settings.toleranceCents;
+      if (pitch !== -1 && confidence >= 0.48) {
+        addPitchReading(pitch, confidence, rms);
+        const smoothed = getSmoothedPitch();
 
-        if (exactEnough && canScoreNormal) {
-          stableCorrectCount++;
-          document.getElementById("normalStatus").className = "status okText";
-          document.getElementById("normalStatus").textContent = `Correto! Segure um pouco... (${stableCorrectCount}/3)`;
+        if (smoothed) {
+          const detectedMidi = freqToMidi(smoothed.pitch);
+          const detectedNote = midiToNoteWithOctave(detectedMidi);
+          const cents = centsDifference(smoothed.pitch, normalTarget.freq);
+          const dynamicTolerance = getDynamicTolerance(settings.toleranceCents, smoothed.confidence, rms);
+          const now = performance.now();
 
-          if (stableCorrectCount >= 3) {
-            recordNoteHit();
-            normalHits++;
-            normalAttempts++;
-            canScoreNormal = false;
-            updateNormalScore();
+          document.getElementById("detectedNote").textContent = detectedNote;
+          document.getElementById("detectedFreq").textContent = `${smoothed.pitch.toFixed(1)} Hz`;
+          document.getElementById("detectedCents").textContent = `${cents > 0 ? "+" : ""}${cents.toFixed(0)} cents`;
 
-            document.getElementById("normalStatus").className = "status okText";
-            document.getElementById("normalStatus").textContent = `Acertou: ${normalTarget.noteFull} na corda ${normalTarget.string.label}, traste ${normalTarget.fret}.`;
-
-            setTimeout(() => newNormalChallenge(true), 900);
+          if (detectedNote !== lastCandidateNote) {
+            lastCandidateNote = detectedNote;
+            noteFirstSeenAt = now;
+            stableCorrectCount = 0;
           }
-        } else {
-          stableCorrectCount = 0;
 
-          if (canScoreNormal) {
-            document.getElementById("normalStatus").className = "status warnText";
-            document.getElementById("normalStatus").textContent = `Ouvindo... alvo: ${normalTarget.noteFull} / ${normalTarget.freq.toFixed(1)} Hz`;
+          const attackSettled = now - noteFirstSeenAt >= settings.attackIgnoreMs;
+          const exactEnough = Math.abs(cents) <= dynamicTolerance;
+
+          if (exactEnough && attackSettled && canScoreNormal) {
+            stableCorrectCount++;
+            updateMicMeter(rms, `Estável ${stableCorrectCount}/${settings.stabilityFrames}`, `${Math.round(rms * 1000)}`);
+            document.getElementById("normalStatus").className = "status okText";
+            document.getElementById("normalStatus").textContent = `Correto! Segure um pouco... (${stableCorrectCount}/${settings.stabilityFrames})`;
+
+            if (stableCorrectCount >= settings.stabilityFrames) {
+              recordNoteHit();
+              normalHits++;
+              normalAttempts++;
+              canScoreNormal = false;
+              updateNormalScore();
+
+              document.getElementById("normalStatus").className = "status okText";
+              document.getElementById("normalStatus").textContent = `Acertou: ${normalTarget.noteFull} na corda ${normalTarget.string.label}, traste ${normalTarget.fret}.`;
+
+              setTimeout(() => newNormalChallenge(true), 900);
+            }
+          } else {
+            stableCorrectCount = 0;
+
+            if (canScoreNormal) {
+              document.getElementById("normalStatus").className = attackSettled ? "status warnText" : "status warnText";
+              document.getElementById("normalStatus").textContent = attackSettled
+                ? `Ouvindo... alvo: ${normalTarget.noteFull} / ${normalTarget.freq.toFixed(1)} Hz / tolerância atual: ±${dynamicTolerance.toFixed(0)} cents`
+                : "Ignorando o ataque inicial da nota. Segure a nota por um instante.";
+            }
           }
         }
       } else {
+        resetPitchTracking();
         document.getElementById("detectedNote").textContent = "-";
         document.getElementById("detectedFreq").textContent = "-";
+        document.getElementById("detectedCents").textContent = "-";
+        if (canScoreNormal) {
+          document.getElementById("normalStatus").className = "status warnText";
+          document.getElementById("normalStatus").textContent = "Som detectado, mas ainda instável. Tente tocar uma nota mais limpa.";
+        }
       }
 
       animationId = requestAnimationFrame(listenPitch);
@@ -999,7 +1221,7 @@
         avgHitSeconds: Number(avgSeconds.toFixed(2))
       });
 
-      setSessionHistory(history.slice(-25));
+      setSessionHistory(history.slice(-80));
 
       session.active = false;
       session.start = null;
@@ -1012,8 +1234,9 @@
       btn.textContent = "Iniciar Sessão";
       btn.className = "ok";
 
+      const lastSession = savedHistory[savedHistory.length - 1];
       document.getElementById("sessionTimer").textContent = "00:00:00";
-      document.getElementById("sessionInfo").textContent = `Sessão encerrada e salva. Notas: ${history[history.length - 1].notes}. Média: ${history[history.length - 1].avgHitSeconds.toFixed(2)}s.`;
+      document.getElementById("sessionInfo").textContent = `Sessão encerrada e salva. Notas: ${lastSession.notes}. Média: ${lastSession.avgHitSeconds.toFixed(2)}s.`;
       renderDashboard();
     }
 
@@ -1044,25 +1267,35 @@
 
     function getSessionHistory() {
       const cookie = getCookie(historyCookieName);
-      if (!cookie) return [];
+      const raw = cookie || localStorage.getItem(historyCookieName) || "[]";
 
       try {
-        const parsed = JSON.parse(decodeURIComponent(cookie));
+        const parsed = JSON.parse(decodeURIComponent(raw));
         return Array.isArray(parsed) ? parsed : [];
       } catch (_) {
-        return [];
+        try {
+          const parsed = JSON.parse(raw);
+          return Array.isArray(parsed) ? parsed : [];
+        } catch (_) {
+          return [];
+        }
       }
     }
 
     function setSessionHistory(history) {
-      const value = encodeURIComponent(JSON.stringify(history));
+      const json = JSON.stringify(history);
+      const encoded = encodeURIComponent(json);
       const maxAge = 60 * 60 * 24 * 365;
-      document.cookie = `${historyCookieName}=${value}; max-age=${maxAge}; path=/; SameSite=Lax`;
+
+      // Salva em cookie, conforme solicitado.
+      // O localStorage fica como backup porque alguns navegadores bloqueiam cookies quando o HTML é aberto via file://.
+      document.cookie = `${historyCookieName}=${encoded}; max-age=${maxAge}; path=/; SameSite=Lax`;
+      localStorage.setItem(historyCookieName, json);
     }
 
     function getCookie(name) {
       const prefix = `${name}=`;
-      const parts = document.cookie.split("; ");
+      const parts = document.cookie ? document.cookie.split("; ") : [];
       const found = parts.find(part => part.startsWith(prefix));
       return found ? found.slice(prefix.length) : "";
     }
@@ -1072,6 +1305,7 @@
       if (!ok) return;
 
       document.cookie = `${historyCookieName}=; max-age=0; path=/; SameSite=Lax`;
+      localStorage.removeItem(historyCookieName);
       renderDashboard();
     }
 
@@ -1107,12 +1341,32 @@
 
     function drawAvgTimeChart(history) {
       const canvas = document.getElementById("avgTimeChart");
-      if (!canvas) return;
+      const scroll = document.getElementById("avgTimeChartScroll");
+      if (!canvas || !scroll) return;
+
+      const isMobile = window.matchMedia("(max-width: 640px)").matches;
+      const baseWidth = Math.max(scroll.clientWidth || 320, 320);
+      const minPointSpacing = isMobile ? 72 : 58;
+      const desiredWidth = history.length > 1
+        ? 100 + (history.length - 1) * minPointSpacing
+        : baseWidth;
+      const cssWidth = Math.max(baseWidth, isMobile ? Math.max(540, desiredWidth) : Math.max(700, desiredWidth));
+      const cssHeight = isMobile ? 280 : 320;
+      const dpr = window.devicePixelRatio || 1;
+
+      canvas.style.width = `${cssWidth}px`;
+      canvas.style.height = `${cssHeight}px`;
+      canvas.width = Math.round(cssWidth * dpr);
+      canvas.height = Math.round(cssHeight * dpr);
 
       const ctx = canvas.getContext("2d");
-      const width = canvas.width;
-      const height = canvas.height;
-      const pad = { left: 58, right: 24, top: 24, bottom: 54 };
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      const width = cssWidth;
+      const height = cssHeight;
+      const pad = isMobile
+        ? { left: 48, right: 16, top: 22, bottom: 66 }
+        : { left: 58, right: 24, top: 24, bottom: 58 };
 
       ctx.clearRect(0, 0, width, height);
 
@@ -1125,7 +1379,7 @@
       ctx.strokeStyle = "rgba(255,255,255,.10)";
       ctx.lineWidth = 1;
       ctx.fillStyle = "rgba(249,250,251,.72)";
-      ctx.font = "12px Arial";
+      ctx.font = `${isMobile ? 11 : 12}px Arial`;
 
       for (let i = 0; i <= 4; i++) {
         const y = pad.top + (chartH / 4) * i;
@@ -1137,14 +1391,15 @@
 
       if (!history.length) {
         ctx.fillStyle = "rgba(156,163,175,.95)";
-        ctx.font = "700 18px Arial";
+        ctx.font = `700 ${isMobile ? 15 : 18}px Arial`;
         ctx.textAlign = "center";
         ctx.fillText("Sem dados para exibir", width / 2, height / 2);
         return;
       }
 
       const values = history.map(item => Number(item.avgHitSeconds || 0));
-      const max = Math.max(...values, 1);
+      const rawMax = Math.max(...values, 1);
+      const max = Math.ceil(rawMax * 1.15 * 10) / 10;
       const min = 0;
       const range = max - min || 1;
       const points = values.map((value, index) => {
@@ -1155,10 +1410,11 @@
 
       ctx.textAlign = "right";
       ctx.fillStyle = "rgba(156,163,175,.95)";
+      ctx.font = `${isMobile ? 11 : 12}px Arial`;
       for (let i = 0; i <= 4; i++) {
         const value = max - (max / 4) * i;
         const y = pad.top + (chartH / 4) * i + 4;
-        ctx.fillText(`${value.toFixed(1)}s`, pad.left - 10, y);
+        ctx.fillText(`${value.toFixed(1)}s`, pad.left - 8, y);
       }
 
       const gradient = ctx.createLinearGradient(0, pad.top, 0, height - pad.bottom);
@@ -1182,12 +1438,12 @@
         else ctx.lineTo(point.x, point.y);
       });
       ctx.strokeStyle = "rgba(56,189,248,.95)";
-      ctx.lineWidth = 3;
+      ctx.lineWidth = isMobile ? 2.5 : 3;
       ctx.stroke();
 
       points.forEach(point => {
         ctx.beginPath();
-        ctx.arc(point.x, point.y, 5, 0, Math.PI * 2);
+        ctx.arc(point.x, point.y, isMobile ? 4 : 5, 0, Math.PI * 2);
         ctx.fillStyle = "rgba(56,189,248,1)";
         ctx.fill();
         ctx.strokeStyle = "rgba(8,47,73,1)";
@@ -1195,23 +1451,41 @@
         ctx.stroke();
       });
 
-      const labelIndexes = getLabelIndexes(history.length);
-      ctx.textAlign = "center";
+      const labelIndexes = getLabelIndexes(history.length, isMobile);
       ctx.fillStyle = "rgba(156,163,175,.95)";
-      ctx.font = "12px Arial";
+      ctx.font = `${isMobile ? 10 : 12}px Arial`;
       labelIndexes.forEach(i => {
         const point = points[i];
-        const label = String(point.label || "").slice(0, 10);
-        ctx.fillText(label, point.x, height - 24);
+        const label = formatChartDateLabel(point.label, isMobile);
+        ctx.save();
+        ctx.translate(point.x, height - (isMobile ? 36 : 28));
+        if (isMobile) {
+          ctx.rotate(-Math.PI / 5);
+          ctx.textAlign = "right";
+        } else {
+          ctx.textAlign = "center";
+        }
+        ctx.fillText(label, 0, 0);
+        ctx.restore();
       });
     }
 
-    function getLabelIndexes(length) {
-      if (length <= 6) return Array.from({ length }, (_, i) => i);
+    function getLabelIndexes(length, isMobile = false) {
+      const maxLabels = isMobile ? 5 : 7;
+      if (length <= maxLabels) return Array.from({ length }, (_, i) => i);
       const indexes = new Set([0, length - 1]);
-      const step = Math.ceil(length / 5);
+      const step = Math.ceil((length - 1) / (maxLabels - 1));
       for (let i = step; i < length - 1; i += step) indexes.add(i);
       return [...indexes].sort((a, b) => a - b);
+    }
+
+    function formatChartDateLabel(value, compact = false) {
+      const text = String(value || "");
+      const match = text.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}:\d{2})/);
+      if (!match) return compact ? text.slice(0, 5) : text.slice(0, 10);
+
+      const [, mm, dd, yyyy, time] = match;
+      return compact ? `${dd}/${mm}` : `${dd}/${mm}/${yyyy.slice(-2)} ${time}`;
     }
 
     function formatDateTimeUS(date) {
@@ -1266,19 +1540,234 @@
       return Math.max(min, Math.min(max, value));
     }
 
-    // Autocorrelação simples para detectar frequência fundamental.
-    // Funciona bem para treino básico, mas pode variar conforme microfone, ruído e timbre.
-    function autoCorrelate(buffer, sampleRate) {
-      let size = buffer.length;
-      let rms = 0;
+    function getRms(buffer) {
+      let sum = 0;
+      for (let i = 0; i < buffer.length; i++) sum += buffer[i] * buffer[i];
+      return Math.sqrt(sum / buffer.length);
+    }
 
-      for (let i = 0; i < size; i++) {
-        rms += buffer[i] * buffer[i];
+    function sensitivityToRms(value) {
+      const normalized = clamp(Number(value || 35), 1, 100) / 100;
+      // Quanto maior a sensibilidade configurada, menor o volume mínimo exigido.
+      return 0.035 - (normalized * 0.030);
+    }
+
+    function resetPitchTracking() {
+      pitchHistory = [];
+      stableCorrectCount = 0;
+      lastCandidateNote = null;
+      noteFirstSeenAt = 0;
+    }
+
+    function addPitchReading(pitch, confidence, rms) {
+      pitchHistory.push({ pitch, confidence, rms, time: performance.now() });
+      if (pitchHistory.length > 7) pitchHistory.shift();
+    }
+
+    function getSmoothedPitch() {
+      if (!pitchHistory.length) return null;
+
+      const groups = new Map();
+      pitchHistory.forEach(item => {
+        const midi = freqToMidi(item.pitch);
+        if (!groups.has(midi)) groups.set(midi, []);
+        groups.get(midi).push(item);
+      });
+
+      let bestMidi = null;
+      let bestScore = -1;
+      groups.forEach((items, midi) => {
+        const score = items.length * 2 + items.reduce((sum, item) => sum + item.confidence, 0);
+        if (score > bestScore) {
+          bestScore = score;
+          bestMidi = midi;
+        }
+      });
+
+      const selected = groups.get(bestMidi) || pitchHistory;
+      const totalWeight = selected.reduce((sum, item) => sum + Math.max(item.confidence, 0.1), 0) || 1;
+      const weightedPitch = selected.reduce((sum, item) => sum + item.pitch * Math.max(item.confidence, 0.1), 0) / totalWeight;
+      const avgConfidence = selected.reduce((sum, item) => sum + item.confidence, 0) / selected.length;
+      const avgRms = selected.reduce((sum, item) => sum + item.rms, 0) / selected.length;
+
+      return { pitch: weightedPitch, confidence: avgConfidence, rms: avgRms };
+    }
+
+    function getDynamicTolerance(baseTolerance, confidence, rms) {
+      let tolerance = Number(baseTolerance || 35);
+
+      if (confidence < 0.65) tolerance += 12;
+      if (confidence > 0.88) tolerance -= 6;
+      if (rms < noiseFloorRms * 1.6) tolerance += 8;
+
+      return clamp(tolerance, 18, 80);
+    }
+
+    function updateMicMeter(rms, label, volumeText) {
+      const fill = document.getElementById("micVolumeFill");
+      const text = document.getElementById("micVolumeText");
+      const quality = document.getElementById("pitchQuality");
+      if (!fill || !text || !quality) return;
+
+      const pct = clamp((rms / 0.08) * 100, 0, 100);
+      fill.style.width = `${pct}%`;
+      text.textContent = volumeText;
+      quality.textContent = label;
+    }
+
+    async function calibrateMicNoise() {
+      let temporaryStream = null;
+      let temporaryContext = null;
+      let temporaryAnalyser = null;
+
+      try {
+        if (analyser && audioContext) {
+          await calibrateUsingAnalyser(analyser, audioContext, 2400);
+          return;
+        }
+
+        temporaryStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false
+          }
+        });
+        temporaryContext = new (window.AudioContext || window.webkitAudioContext)();
+        temporaryAnalyser = temporaryContext.createAnalyser();
+        temporaryAnalyser.fftSize = 4096;
+        const source = temporaryContext.createMediaStreamSource(temporaryStream);
+        source.connect(temporaryAnalyser);
+
+        await calibrateUsingAnalyser(temporaryAnalyser, temporaryContext, 2400);
+      } catch (err) {
+        alert("Não consegui calibrar o microfone. Verifique a permissão de microfone do navegador.");
+      } finally {
+        if (temporaryStream) temporaryStream.getTracks().forEach(t => t.stop());
+        if (temporaryContext) temporaryContext.close();
+      }
+    }
+
+    function calibrateUsingAnalyser(targetAnalyser, targetContext, durationMs) {
+      return new Promise(resolve => {
+        const samples = [];
+        const buffer = new Float32Array(targetAnalyser.fftSize);
+        const start = performance.now();
+
+        const status = document.getElementById("normalStatus");
+        if (status) {
+          status.className = "status warnText";
+          status.textContent = "Calibrando ruído ambiente. Fique em silêncio e não toque a guitarra.";
+        }
+
+        function sample() {
+          targetAnalyser.getFloatTimeDomainData(buffer);
+          const rms = getRms(buffer);
+          samples.push(rms);
+          updateMicMeter(rms, "Calibrando", `${Math.round(rms * 1000)}`);
+
+          if (performance.now() - start < durationMs) {
+            requestAnimationFrame(sample);
+            return;
+          }
+
+          samples.sort((a, b) => a - b);
+          const p90 = samples[Math.floor(samples.length * 0.90)] || 0.012;
+          noiseFloorRms = clamp(p90 * 2.8, 0.004, 0.050);
+          settings.micSensitivity = clamp(Math.round((0.035 - noiseFloorRms) / 0.030 * 100), 1, 100);
+          document.getElementById("micSensitivity").value = settings.micSensitivity;
+          localStorage.setItem("guitarNoteTrainerSettings", JSON.stringify(settings));
+
+          const doneText = `Calibração concluída. Sensibilidade ajustada para ${settings.micSensitivity}.`;
+          if (status) {
+            status.className = "status okText";
+            status.textContent = doneText;
+          } else {
+            alert(doneText);
+          }
+          updateMicMeter(0, "Calibrado", "-");
+          resolve();
+        }
+
+        sample();
+      });
+    }
+
+    // Detecção YIN: mais estável para instrumentos reais do que a autocorrelação simples.
+    function detectPitchYin(buffer, sampleRate) {
+      const threshold = 0.12;
+      const minFreq = 60;
+      const maxFreq = 1400;
+      const minTau = Math.floor(sampleRate / maxFreq);
+      const maxTau = Math.min(Math.floor(sampleRate / minFreq), Math.floor(buffer.length / 2));
+      const yin = new Float32Array(maxTau + 1);
+
+      yin[0] = 1;
+      for (let tau = 1; tau <= maxTau; tau++) {
+        let sum = 0;
+        for (let i = 0; i < maxTau; i++) {
+          const delta = buffer[i] - buffer[i + tau];
+          sum += delta * delta;
+        }
+        yin[tau] = sum;
       }
 
-      rms = Math.sqrt(rms / size);
+      let runningSum = 0;
+      for (let tau = 1; tau <= maxTau; tau++) {
+        runningSum += yin[tau];
+        yin[tau] = runningSum === 0 ? 1 : yin[tau] * tau / runningSum;
+      }
 
-      if (rms < 0.015) return -1;
+      let tauEstimate = -1;
+      for (let tau = minTau; tau <= maxTau; tau++) {
+        if (yin[tau] < threshold) {
+          while (tau + 1 <= maxTau && yin[tau + 1] < yin[tau]) tau++;
+          tauEstimate = tau;
+          break;
+        }
+      }
+
+      if (tauEstimate === -1) {
+        let bestTau = -1;
+        let bestVal = 1;
+        for (let tau = minTau; tau <= maxTau; tau++) {
+          if (yin[tau] < bestVal) {
+            bestVal = yin[tau];
+            bestTau = tau;
+          }
+        }
+        if (bestVal > 0.22) return { pitch: -1, confidence: 0 };
+        tauEstimate = bestTau;
+      }
+
+      const betterTau = parabolicInterpolate(yin, tauEstimate);
+      const frequency = sampleRate / betterTau;
+      if (!Number.isFinite(frequency) || frequency < minFreq || frequency > maxFreq) {
+        return { pitch: -1, confidence: 0 };
+      }
+
+      const confidence = clamp(1 - yin[tauEstimate], 0, 1);
+      return { pitch: frequency, confidence };
+    }
+
+    function parabolicInterpolate(values, index) {
+      const x0 = index < 1 ? index : index - 1;
+      const x2 = index + 1 < values.length ? index + 1 : index;
+      if (x0 === index || x2 === index) return index;
+
+      const s0 = values[x0];
+      const s1 = values[index];
+      const s2 = values[x2];
+      const divisor = 2 * (2 * s1 - s2 - s0);
+      if (divisor === 0) return index;
+      return index + (s2 - s0) / divisor;
+    }
+
+    // Fallback: usado apenas quando o YIN não consegue uma leitura confiável.
+    function autoCorrelate(buffer, sampleRate, minRms = 0.012) {
+      let size = buffer.length;
+      const rms = getRms(buffer);
+      if (rms < minRms) return -1;
 
       let r1 = 0;
       let r2 = size - 1;
@@ -1300,7 +1789,6 @@
 
       buffer = buffer.slice(r1, r2);
       size = buffer.length;
-
       const correlations = new Array(size).fill(0);
 
       for (let lag = 0; lag < size; lag++) {
@@ -1333,9 +1821,7 @@
       if (a) maxPos = maxPos - b / (2 * a);
 
       const frequency = sampleRate / maxPos;
-
       if (frequency < 60 || frequency > 1400) return -1;
-
       return frequency;
     }
   </script>
