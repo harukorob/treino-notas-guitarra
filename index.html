@@ -430,35 +430,11 @@
       letter-spacing: .08em;
     }
 
-    .chart-scroll {
-      width: 100%;
-      overflow-x: auto;
-      overflow-y: hidden;
-      padding-bottom: 8px;
-      -webkit-overflow-scrolling: touch;
-    }
-
-    .chart-scroll::-webkit-scrollbar {
-      height: 8px;
-    }
-
-    .chart-scroll::-webkit-scrollbar-thumb {
-      background: rgba(56,189,248,.35);
-      border-radius: 999px;
-    }
-
     canvas {
+      width: 100%;
+      max-width: 100%;
+      height: 320px;
       display: block;
-      max-width: none;
-      border-radius: 12px;
-    }
-
-    .mobile-chart-hint {
-      display: none;
-      margin-top: 8px;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 700;
     }
 
 
@@ -520,14 +496,6 @@
     }
 
     @media (max-width: 780px) {
-      .app {
-        padding: 14px;
-      }
-
-      .screen {
-        padding: 14px;
-      }
-
       .grid {
         grid-template-columns: 1fr;
       }
@@ -538,14 +506,6 @@
 
       header {
         align-items: flex-start;
-      }
-
-      .chart-card {
-        padding: 12px;
-      }
-
-      .mobile-chart-hint {
-        display: block;
       }
     }
   </style>
@@ -687,10 +647,7 @@
 
       <div class="chart-card">
         <h3>Tempo Médio de Acerto por Sessão</h3>
-        <div class="chart-scroll" id="avgTimeChartScroll">
-          <canvas id="avgTimeChart"></canvas>
-        </div>
-        <div class="mobile-chart-hint">No celular, arraste o gráfico para o lado para ver todas as sessões.</div>
+        <canvas id="avgTimeChart" width="1100" height="320"></canvas>
       </div>
     </section>
 
@@ -713,7 +670,7 @@
 
         <label>
           Sensibilidade do microfone:
-          <input id="micSensitivity" type="number" min="1" max="100" value="35" />
+          <input id="micSensitivity" type="number" min="1" max="100" value="50" />
         </label>
 
         <label>
@@ -755,7 +712,7 @@
       activeStrings: strings.map(s => s.id),
       fretCount: 12,
       toleranceCents: 35,
-      micSensitivity: 35,
+      micSensitivity: 50,
       stabilityFrames: 5,
       attackIgnoreMs: 150
     };
@@ -796,11 +753,6 @@
     newNormalChallenge(false);
     newSimChallenge(false);
     renderDashboard();
-    window.addEventListener("resize", () => {
-      if (document.getElementById("dashboard")?.classList.contains("active")) {
-        renderDashboard();
-      }
-    });
 
     function showScreen(id) {
       document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
@@ -818,7 +770,7 @@
             activeStrings: Array.isArray(parsed.activeStrings) && parsed.activeStrings.length ? parsed.activeStrings : strings.map(s => s.id),
             fretCount: Number(parsed.fretCount || 12),
             toleranceCents: Number(parsed.toleranceCents || 35),
-            micSensitivity: Number(parsed.micSensitivity || 35),
+            micSensitivity: Number(parsed.micSensitivity || 50),
             stabilityFrames: Number(parsed.stabilityFrames || 5),
             attackIgnoreMs: Number(parsed.attackIgnoreMs ?? 150)
           };
@@ -1215,7 +1167,7 @@
       const history = getSessionHistory();
       history.push({
         startedAt: session.startLabel,
-        duration: formatDurationHHmm(durationMs),
+        duration: formatDurationMMss(durationMs),
         durationSeconds: Math.round(durationMs / 1000),
         notes: session.notes,
         avgHitSeconds: Number(avgSeconds.toFixed(2))
@@ -1329,7 +1281,7 @@
         const row = document.createElement("tr");
         row.innerHTML = `
           <td>${item.startedAt || "-"}</td>
-          <td>${item.duration || "00:00"}</td>
+          <td>${formatStoredSessionDuration(item)}</td>
           <td>${item.notes ?? 0}</td>
           <td>${Number(item.avgHitSeconds || 0).toFixed(2)}</td>
         `;
@@ -1341,32 +1293,12 @@
 
     function drawAvgTimeChart(history) {
       const canvas = document.getElementById("avgTimeChart");
-      const scroll = document.getElementById("avgTimeChartScroll");
-      if (!canvas || !scroll) return;
-
-      const isMobile = window.matchMedia("(max-width: 640px)").matches;
-      const baseWidth = Math.max(scroll.clientWidth || 320, 320);
-      const minPointSpacing = isMobile ? 72 : 58;
-      const desiredWidth = history.length > 1
-        ? 100 + (history.length - 1) * minPointSpacing
-        : baseWidth;
-      const cssWidth = Math.max(baseWidth, isMobile ? Math.max(540, desiredWidth) : Math.max(700, desiredWidth));
-      const cssHeight = isMobile ? 280 : 320;
-      const dpr = window.devicePixelRatio || 1;
-
-      canvas.style.width = `${cssWidth}px`;
-      canvas.style.height = `${cssHeight}px`;
-      canvas.width = Math.round(cssWidth * dpr);
-      canvas.height = Math.round(cssHeight * dpr);
+      if (!canvas) return;
 
       const ctx = canvas.getContext("2d");
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-
-      const width = cssWidth;
-      const height = cssHeight;
-      const pad = isMobile
-        ? { left: 48, right: 16, top: 22, bottom: 66 }
-        : { left: 58, right: 24, top: 24, bottom: 58 };
+      const width = canvas.width;
+      const height = canvas.height;
+      const pad = { left: 58, right: 24, top: 24, bottom: 54 };
 
       ctx.clearRect(0, 0, width, height);
 
@@ -1379,7 +1311,7 @@
       ctx.strokeStyle = "rgba(255,255,255,.10)";
       ctx.lineWidth = 1;
       ctx.fillStyle = "rgba(249,250,251,.72)";
-      ctx.font = `${isMobile ? 11 : 12}px Arial`;
+      ctx.font = "12px Arial";
 
       for (let i = 0; i <= 4; i++) {
         const y = pad.top + (chartH / 4) * i;
@@ -1391,15 +1323,14 @@
 
       if (!history.length) {
         ctx.fillStyle = "rgba(156,163,175,.95)";
-        ctx.font = `700 ${isMobile ? 15 : 18}px Arial`;
+        ctx.font = "700 18px Arial";
         ctx.textAlign = "center";
         ctx.fillText("Sem dados para exibir", width / 2, height / 2);
         return;
       }
 
       const values = history.map(item => Number(item.avgHitSeconds || 0));
-      const rawMax = Math.max(...values, 1);
-      const max = Math.ceil(rawMax * 1.15 * 10) / 10;
+      const max = Math.max(...values, 1);
       const min = 0;
       const range = max - min || 1;
       const points = values.map((value, index) => {
@@ -1410,11 +1341,10 @@
 
       ctx.textAlign = "right";
       ctx.fillStyle = "rgba(156,163,175,.95)";
-      ctx.font = `${isMobile ? 11 : 12}px Arial`;
       for (let i = 0; i <= 4; i++) {
         const value = max - (max / 4) * i;
         const y = pad.top + (chartH / 4) * i + 4;
-        ctx.fillText(`${value.toFixed(1)}s`, pad.left - 8, y);
+        ctx.fillText(`${value.toFixed(1)}s`, pad.left - 10, y);
       }
 
       const gradient = ctx.createLinearGradient(0, pad.top, 0, height - pad.bottom);
@@ -1438,12 +1368,12 @@
         else ctx.lineTo(point.x, point.y);
       });
       ctx.strokeStyle = "rgba(56,189,248,.95)";
-      ctx.lineWidth = isMobile ? 2.5 : 3;
+      ctx.lineWidth = 3;
       ctx.stroke();
 
       points.forEach(point => {
         ctx.beginPath();
-        ctx.arc(point.x, point.y, isMobile ? 4 : 5, 0, Math.PI * 2);
+        ctx.arc(point.x, point.y, 5, 0, Math.PI * 2);
         ctx.fillStyle = "rgba(56,189,248,1)";
         ctx.fill();
         ctx.strokeStyle = "rgba(8,47,73,1)";
@@ -1451,41 +1381,23 @@
         ctx.stroke();
       });
 
-      const labelIndexes = getLabelIndexes(history.length, isMobile);
+      const labelIndexes = getLabelIndexes(history.length);
+      ctx.textAlign = "center";
       ctx.fillStyle = "rgba(156,163,175,.95)";
-      ctx.font = `${isMobile ? 10 : 12}px Arial`;
+      ctx.font = "12px Arial";
       labelIndexes.forEach(i => {
         const point = points[i];
-        const label = formatChartDateLabel(point.label, isMobile);
-        ctx.save();
-        ctx.translate(point.x, height - (isMobile ? 36 : 28));
-        if (isMobile) {
-          ctx.rotate(-Math.PI / 5);
-          ctx.textAlign = "right";
-        } else {
-          ctx.textAlign = "center";
-        }
-        ctx.fillText(label, 0, 0);
-        ctx.restore();
+        const label = String(point.label || "").slice(0, 10);
+        ctx.fillText(label, point.x, height - 24);
       });
     }
 
-    function getLabelIndexes(length, isMobile = false) {
-      const maxLabels = isMobile ? 5 : 7;
-      if (length <= maxLabels) return Array.from({ length }, (_, i) => i);
+    function getLabelIndexes(length) {
+      if (length <= 6) return Array.from({ length }, (_, i) => i);
       const indexes = new Set([0, length - 1]);
-      const step = Math.ceil((length - 1) / (maxLabels - 1));
+      const step = Math.ceil(length / 5);
       for (let i = step; i < length - 1; i += step) indexes.add(i);
       return [...indexes].sort((a, b) => a - b);
-    }
-
-    function formatChartDateLabel(value, compact = false) {
-      const text = String(value || "");
-      const match = text.match(/^(\d{2})\/(\d{2})\/(\d{4})\s+(\d{2}:\d{2})/);
-      if (!match) return compact ? text.slice(0, 5) : text.slice(0, 10);
-
-      const [, mm, dd, yyyy, time] = match;
-      return compact ? `${dd}/${mm}` : `${dd}/${mm}/${yyyy.slice(-2)} ${time}`;
     }
 
     function formatDateTimeUS(date) {
@@ -1497,11 +1409,19 @@
       return `${mm}/${dd}/${yyyy} ${hh}:${min}`;
     }
 
-    function formatDurationHHmm(ms) {
-      const totalMinutes = Math.floor(ms / 60000);
-      const hours = Math.floor(totalMinutes / 60);
-      const minutes = totalMinutes % 60;
-      return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+    function formatStoredSessionDuration(item) {
+      if (typeof item.durationSeconds === "number") {
+        return formatDurationMMss(item.durationSeconds * 1000);
+      }
+
+      return item.duration || "00:00";
+    }
+
+    function formatDurationMMss(ms) {
+      const totalSeconds = Math.floor(ms / 1000);
+      const minutes = Math.floor(totalSeconds / 60);
+      const seconds = totalSeconds % 60;
+      return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
     }
 
     function formatDurationHHmmss(ms) {
@@ -1547,9 +1467,9 @@
     }
 
     function sensitivityToRms(value) {
-      const normalized = clamp(Number(value || 35), 1, 100) / 100;
+      const normalized = clamp(Number(value || 50), 1, 100) / 100;
       // Quanto maior a sensibilidade configurada, menor o volume mínimo exigido.
-      return 0.035 - (normalized * 0.030);
+      return clamp(0.035 - (normalized * 0.040), 0.004, 0.050);
     }
 
     function resetPitchTracking() {
