@@ -433,8 +433,9 @@
     canvas {
       width: 100%;
       max-width: 100%;
-      height: 320px;
+      height: clamp(220px, 58vw, 320px);
       display: block;
+      touch-action: manipulation;
     }
 
 
@@ -496,6 +497,18 @@
     }
 
     @media (max-width: 780px) {
+      .app {
+        padding: 12px;
+      }
+
+      .screen {
+        padding: 14px;
+      }
+
+      .chart-card {
+        padding: 12px;
+      }
+
       .grid {
         grid-template-columns: 1fr;
       }
@@ -527,7 +540,7 @@
 
       <div class="session-bar">
         <button id="sessionButton" class="ok" onclick="toggleSession()">Iniciar Sessão</button>
-        <div id="sessionTimer" class="session-timer">00:00:00</div>
+        <div id="sessionTimer" class="session-timer">00:00</div>
         <div id="sessionInfo" class="session-info">Sessão não iniciada.</div>
       </div>
     </header>
@@ -753,6 +766,7 @@
     newNormalChallenge(false);
     newSimChallenge(false);
     renderDashboard();
+    window.addEventListener("resize", debounce(renderDashboard, 180));
 
     function showScreen(id) {
       document.querySelectorAll(".screen").forEach(s => s.classList.remove("active"));
@@ -829,15 +843,33 @@
     }
 
     function randomChallenge() {
-      const active = getActiveStrings();
-      const string = active[Math.floor(Math.random() * active.length)];
-      const fret = Math.floor(Math.random() * (settings.fretCount + 1));
-      const midi = string.midi + fret;
-      const note = midiToNoteName(midi);
-      const noteFull = midiToNoteWithOctave(midi);
-      const freq = midiToFreq(midi);
+      const positions = getPlayablePositions();
+      if (!positions.length) {
+        throw new Error("Nenhuma posição tocável disponível com as configurações atuais.");
+      }
 
-      return { string, fret, midi, note, noteFull, freq };
+      return positions[Math.floor(Math.random() * positions.length)];
+    }
+
+    function getPlayablePositions() {
+      const active = getActiveStrings();
+      const positions = [];
+
+      active.forEach(string => {
+        for (let fret = 0; fret <= settings.fretCount; fret++) {
+          const midi = string.midi + fret;
+          positions.push({
+            string,
+            fret,
+            midi,
+            note: midiToNoteName(midi),
+            noteFull: midiToNoteWithOctave(midi),
+            freq: midiToFreq(midi)
+          });
+        }
+      });
+
+      return positions;
     }
 
     function newNormalChallenge(resetScoreLock = true) {
@@ -963,9 +995,10 @@
       const fallbackPitch = pitchData.pitch === -1 ? autoCorrelate(buffer, audioContext.sampleRate, noiseFloorRms) : -1;
       const pitch = pitchData.pitch !== -1 ? pitchData.pitch : fallbackPitch;
       const confidence = pitchData.confidence || (fallbackPitch !== -1 ? 0.55 : 0);
+      const correctedPitch = pitch !== -1 ? correctOctaveAgainstTarget(pitch, normalTarget.freq) : -1;
 
-      if (pitch !== -1 && confidence >= 0.48) {
-        addPitchReading(pitch, confidence, rms);
+      if (correctedPitch !== -1 && confidence >= 0.48) {
+        addPitchReading(correctedPitch, confidence, rms);
         const smoothed = getSmoothedPitch();
 
         if (smoothed) {
@@ -1186,8 +1219,8 @@
       btn.textContent = "Iniciar Sessão";
       btn.className = "ok";
 
-      const lastSession = savedHistory[savedHistory.length - 1];
-      document.getElementById("sessionTimer").textContent = "00:00:00";
+      const lastSession = history[history.length - 1];
+      document.getElementById("sessionTimer").textContent = "00:00";
       document.getElementById("sessionInfo").textContent = `Sessão encerrada e salva. Notas: ${lastSession.notes}. Média: ${lastSession.avgHitSeconds.toFixed(2)}s.`;
       renderDashboard();
     }
@@ -1214,7 +1247,7 @@
 
     function updateSessionTimer() {
       if (!session.active || !session.start) return;
-      document.getElementById("sessionTimer").textContent = formatDurationHHmmss(new Date() - session.start);
+      document.getElementById("sessionTimer").textContent = formatDurationMMss(new Date() - session.start);
     }
 
     function getSessionHistory() {
@@ -1295,10 +1328,17 @@
       const canvas = document.getElementById("avgTimeChart");
       if (!canvas) return;
 
+      const size = resizeCanvasToDisplaySize(canvas);
       const ctx = canvas.getContext("2d");
-      const width = canvas.width;
-      const height = canvas.height;
-      const pad = { left: 58, right: 24, top: 24, bottom: 54 };
+      const ratio = window.devicePixelRatio || 1;
+      ctx.setTransform(ratio, 0, 0, ratio, 0, 0);
+
+      const width = size.width;
+      const height = size.height;
+      const isMobileChart = width < 520;
+      const pad = isMobileChart
+        ? { left: 44, right: 12, top: 20, bottom: 42 }
+        : { left: 58, right: 24, top: 24, bottom: 54 };
 
       ctx.clearRect(0, 0, width, height);
 
@@ -1311,7 +1351,7 @@
       ctx.strokeStyle = "rgba(255,255,255,.10)";
       ctx.lineWidth = 1;
       ctx.fillStyle = "rgba(249,250,251,.72)";
-      ctx.font = "12px Arial";
+      ctx.font = isMobileChart ? "11px Arial" : "12px Arial";
 
       for (let i = 0; i <= 4; i++) {
         const y = pad.top + (chartH / 4) * i;
@@ -1323,7 +1363,7 @@
 
       if (!history.length) {
         ctx.fillStyle = "rgba(156,163,175,.95)";
-        ctx.font = "700 18px Arial";
+        ctx.font = isMobileChart ? "700 15px Arial" : "700 18px Arial";
         ctx.textAlign = "center";
         ctx.fillText("Sem dados para exibir", width / 2, height / 2);
         return;
@@ -1373,7 +1413,7 @@
 
       points.forEach(point => {
         ctx.beginPath();
-        ctx.arc(point.x, point.y, 5, 0, Math.PI * 2);
+        ctx.arc(point.x, point.y, isMobileChart ? 4 : 5, 0, Math.PI * 2);
         ctx.fillStyle = "rgba(56,189,248,1)";
         ctx.fill();
         ctx.strokeStyle = "rgba(8,47,73,1)";
@@ -1384,18 +1424,47 @@
       const labelIndexes = getLabelIndexes(history.length);
       ctx.textAlign = "center";
       ctx.fillStyle = "rgba(156,163,175,.95)";
-      ctx.font = "12px Arial";
+      ctx.font = isMobileChart ? "10px Arial" : "12px Arial";
       labelIndexes.forEach(i => {
         const point = points[i];
-        const label = String(point.label || "").slice(0, 10);
-        ctx.fillText(label, point.x, height - 24);
+        const label = formatChartDateLabel(point.label, isMobileChart);
+        ctx.fillText(label, point.x, height - (isMobileChart ? 18 : 24));
       });
     }
 
+    function resizeCanvasToDisplaySize(canvas) {
+      const ratio = window.devicePixelRatio || 1;
+      const rect = canvas.getBoundingClientRect();
+      const width = Math.max(260, Math.round(rect.width));
+      const height = Math.max(220, Math.round(rect.height));
+      const desiredWidth = Math.round(width * ratio);
+      const desiredHeight = Math.round(height * ratio);
+
+      if (canvas.width !== desiredWidth || canvas.height !== desiredHeight) {
+        canvas.width = desiredWidth;
+        canvas.height = desiredHeight;
+      }
+
+      return { width, height };
+    }
+
+    function formatChartDateLabel(label, compact) {
+      const text = String(label || "");
+      if (!compact) return text.slice(0, 10);
+
+      const match = text.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+      if (match) return `${match[1]}/${match[2]}`;
+
+      return text.slice(0, 5);
+    }
+
     function getLabelIndexes(length) {
-      if (length <= 6) return Array.from({ length }, (_, i) => i);
+      const canvas = document.getElementById("avgTimeChart");
+      const maxLabels = canvas && canvas.clientWidth < 520 ? 3 : 6;
+
+      if (length <= maxLabels) return Array.from({ length }, (_, i) => i);
       const indexes = new Set([0, length - 1]);
-      const step = Math.ceil(length / 5);
+      const step = Math.ceil(length / (maxLabels - 1));
       for (let i = step; i < length - 1; i += step) indexes.add(i);
       return [...indexes].sort((a, b) => a - b);
     }
@@ -1432,6 +1501,33 @@
       return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
     }
 
+    function correctOctaveAgainstTarget(pitch, targetFreq) {
+      if (!Number.isFinite(pitch) || !Number.isFinite(targetFreq) || pitch <= 0 || targetFreq <= 0) {
+        return pitch;
+      }
+
+      const candidates = [pitch / 4, pitch / 2, pitch, pitch * 2, pitch * 4]
+        .filter(freq => freq >= 60 && freq <= 1400)
+        .map(freq => ({
+          freq,
+          cents: Math.abs(centsDifference(freq, targetFreq))
+        }))
+        .sort((a, b) => a.cents - b.cents);
+
+      if (!candidates.length) return pitch;
+
+      const best = candidates[0];
+      const originalCents = Math.abs(centsDifference(pitch, targetFreq));
+
+      // Corrige apenas erros claros de oitava/sub-harmônico: mesma nota em outra oitava
+      // e muito mais perto da frequência-alvo depois de multiplicar/dividir por 2.
+      if (best.freq !== pitch && best.cents <= 65 && originalCents > 500) {
+        return best.freq;
+      }
+
+      return pitch;
+    }
+
     function midiToFreq(midi) {
       return 440 * Math.pow(2, (midi - 69) / 12);
     }
@@ -1454,6 +1550,14 @@
 
     function centsDifference(freq, targetFreq) {
       return 1200 * Math.log2(freq / targetFreq);
+    }
+
+    function debounce(fn, delay) {
+      let timer = null;
+      return (...args) => {
+        clearTimeout(timer);
+        timer = setTimeout(() => fn(...args), delay);
+      };
     }
 
     function clamp(value, min, max) {
