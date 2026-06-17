@@ -993,8 +993,10 @@
 
       const pitchData = detectPitchYin(buffer, audioContext.sampleRate);
       const fallbackPitch = pitchData.pitch === -1 ? autoCorrelate(buffer, audioContext.sampleRate, noiseFloorRms) : -1;
-      const pitch = pitchData.pitch !== -1 ? pitchData.pitch : fallbackPitch;
-      const confidence = pitchData.confidence || (fallbackPitch !== -1 ? 0.55 : 0);
+      const targetPitchData = detectPitchNearTarget(buffer, audioContext.sampleRate, normalTarget.freq);
+      const selectedPitchData = chooseBestPitchCandidate(pitchData, fallbackPitch, targetPitchData, normalTarget.freq);
+      const pitch = selectedPitchData.pitch;
+      const confidence = selectedPitchData.confidence;
       const correctedPitch = pitch !== -1 ? correctOctaveAgainstTarget(pitch, normalTarget.freq) : -1;
 
       if (correctedPitch !== -1 && confidence >= 0.48) {
@@ -1526,6 +1528,126 @@
       }
 
       return pitch;
+    }
+
+    function chooseBestPitchCandidate(yinData, fallbackPitch, targetPitchData, targetFreq) {
+      const rawPitch = yinData.pitch !== -1 ? yinData.pitch : fallbackPitch;
+      const rawConfidence = yinData.pitch !== -1 ? yinData.confidence : (fallbackPitch !== -1 ? 0.55 : 0);
+
+      if (!targetPitchData || targetPitchData.pitch === -1) {
+        return { pitch: rawPitch, confidence: rawConfidence };
+      }
+
+      if (rawPitch === -1) {
+        return targetPitchData;
+      }
+
+      const rawCorrected = correctOctaveAgainstTarget(rawPitch, targetFreq);
+      const rawCents = Math.abs(centsDifference(rawCorrected, targetFreq));
+      const targetCents = Math.abs(centsDifference(targetPitchData.pitch, targetFreq));
+
+      // Em notas como F4-G#4 na E aguda, a fundamental pode ficar fraca e o YIN
+      // pode preferir harmônicos/sub-harmônicos. Quando a busca focada na região
+      // da nota-alvo encontra uma leitura claramente mais próxima, ela tem prioridade.
+      if (targetPitchData.confidence >= 0.50 && targetCents <= 180 && targetCents + 25 < rawCents) {
+        return targetPitchData;
+      }
+
+      return { pitch: rawPitch, confidence: rawConfidence };
+    }
+
+    function detectPitchNearTarget(buffer, sampleRate, targetFreq) {
+      if (!Number.isFinite(targetFreq) || targetFreq <= 0) {
+        return { pitch: -1, confidence: 0 };
+      }
+
+      const cleaned = prepareBufferForPitch(buffer);
+      const searchRadius = Math.pow(2, 3 / 12); // procura até 3 semitons ao redor da nota-alvo
+      const lowFreq = Math.max(60, targetFreq / searchRadius);
+      const highFreq = Math.min(1400, targetFreq * searchRadius);
+      const minLag = Math.max(2, Math.floor(sampleRate / highFreq));
+      const maxLag = Math.min(cleaned.length - 2, Math.ceil(sampleRate / lowFreq));
+
+      if (maxLag <= minLag) {
+        return { pitch: -1, confidence: 0 };
+      }
+
+      let bestLag = -1;
+      let bestScore = -1;
+
+      for (let lag = minLag; lag <= maxLag; lag++) {
+        const score = normalizedCorrelationAtLag(cleaned, lag);
+        if (score > bestScore) {
+          bestScore = score;
+          bestLag = lag;
+        }
+      }
+
+      if (bestLag === -1 || bestScore < 0.34) {
+        return { pitch: -1, confidence: 0 };
+      }
+
+      const refinedLag = refineLagByCorrelation(cleaned, bestLag);
+      const frequency = sampleRate / refinedLag;
+      if (!Number.isFinite(frequency) || frequency < 60 || frequency > 1400) {
+        return { pitch: -1, confidence: 0 };
+      }
+
+      return { pitch: frequency, confidence: clamp(bestScore, 0, 1) };
+    }
+
+    function prepareBufferForPitch(buffer) {
+      let mean = 0;
+      for (let i = 0; i < buffer.length; i++) mean += buffer[i];
+      mean /= buffer.length || 1;
+
+      let maxAbs = 0;
+      const cleaned = new Float32Array(buffer.length);
+      for (let i = 0; i < buffer.length; i++) {
+        const value = buffer[i] - mean;
+        cleaned[i] = value;
+        const abs = Math.abs(value);
+        if (abs > maxAbs) maxAbs = abs;
+      }
+
+      // Center clipping leve reduz ruído/ressonância sem apagar a fundamental.
+      const clipLevel = maxAbs * 0.08;
+      for (let i = 0; i < cleaned.length; i++) {
+        const value = cleaned[i];
+        if (Math.abs(value) < clipLevel) cleaned[i] = 0;
+      }
+
+      return cleaned;
+    }
+
+    function normalizedCorrelationAtLag(buffer, lag) {
+      let sum = 0;
+      let sumA = 0;
+      let sumB = 0;
+      const limit = buffer.length - lag;
+
+      for (let i = 0; i < limit; i++) {
+        const a = buffer[i];
+        const b = buffer[i + lag];
+        sum += a * b;
+        sumA += a * a;
+        sumB += b * b;
+      }
+
+      const denom = Math.sqrt(sumA * sumB);
+      return denom ? sum / denom : 0;
+    }
+
+    function refineLagByCorrelation(buffer, lag) {
+      const y0 = normalizedCorrelationAtLag(buffer, lag - 1);
+      const y1 = normalizedCorrelationAtLag(buffer, lag);
+      const y2 = normalizedCorrelationAtLag(buffer, lag + 1);
+      const divisor = 2 * (2 * y1 - y2 - y0);
+
+      if (!divisor) return lag;
+
+      const adjustment = (y2 - y0) / divisor;
+      return lag + clamp(adjustment, -0.5, 0.5);
     }
 
     function midiToFreq(midi) {
