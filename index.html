@@ -375,6 +375,30 @@
       margin: 12px 0 16px;
     }
 
+    .delete-row-btn {
+      width: 34px;
+      height: 34px;
+      border-radius: 999px;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(239, 68, 68, .14);
+      color: #fecaca;
+      border: 1px solid rgba(239, 68, 68, .35);
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .delete-row-btn:hover {
+      background: rgba(239, 68, 68, .28);
+    }
+
+    .action-cell {
+      width: 58px;
+      text-align: center;
+    }
+
     .table-wrap {
       overflow-x: auto;
       border-radius: 16px;
@@ -385,7 +409,7 @@
     table {
       width: 100%;
       border-collapse: collapse;
-      min-width: 760px;
+      min-width: 860px;
     }
 
     th, td {
@@ -648,6 +672,7 @@
         <table>
           <thead>
             <tr>
+              <th class="action-cell">Excluir</th>
               <th>Data atual</th>
               <th>Duração da sessão</th>
               <th>Qtde Notas</th>
@@ -997,10 +1022,9 @@
       const selectedPitchData = chooseBestPitchCandidate(pitchData, fallbackPitch, targetPitchData, normalTarget.freq);
       const pitch = selectedPitchData.pitch;
       const confidence = selectedPitchData.confidence;
-      const correctedPitch = pitch !== -1 ? correctOctaveAgainstTarget(pitch, normalTarget.freq) : -1;
 
-      if (correctedPitch !== -1 && confidence >= 0.48) {
-        addPitchReading(correctedPitch, confidence, rms);
+      if (pitch !== -1 && confidence >= 0.48) {
+        addPitchReading(pitch, confidence, rms);
         const smoothed = getSmoothedPitch();
 
         if (smoothed) {
@@ -1021,7 +1045,8 @@
           }
 
           const attackSettled = now - noteFirstSeenAt >= settings.attackIgnoreMs;
-          const exactEnough = Math.abs(cents) <= dynamicTolerance;
+          const octaveMatches = detectedMidi === normalTarget.midi;
+          const exactEnough = octaveMatches && Math.abs(cents) <= dynamicTolerance;
 
           if (exactEnough && attackSettled && canScoreNormal) {
             stableCorrectCount++;
@@ -1047,7 +1072,7 @@
             if (canScoreNormal) {
               document.getElementById("normalStatus").className = attackSettled ? "status warnText" : "status warnText";
               document.getElementById("normalStatus").textContent = attackSettled
-                ? `Ouvindo... alvo: ${normalTarget.noteFull} / ${normalTarget.freq.toFixed(1)} Hz / tolerância atual: ±${dynamicTolerance.toFixed(0)} cents`
+                ? getListeningStatusText(detectedMidi, cents, dynamicTolerance)
                 : "Ignorando o ataque inicial da nota. Segure a nota por um instante.";
             }
           }
@@ -1296,6 +1321,19 @@
       renderDashboard();
     }
 
+    function deleteSessionHistoryRow(index) {
+      const history = getSessionHistory();
+      const item = history[index];
+      if (!item) return;
+
+      const ok = confirm(`Deseja excluir a sessão de ${item.startedAt || "data não identificada"}?`);
+      if (!ok) return;
+
+      history.splice(index, 1);
+      setSessionHistory(history);
+      renderDashboard();
+    }
+
     function renderDashboard() {
       const tbody = document.getElementById("historyTableBody");
       const canvas = document.getElementById("avgTimeChart");
@@ -1306,22 +1344,26 @@
 
       if (!history.length) {
         const row = document.createElement("tr");
-        row.innerHTML = `<td class="empty-state" colspan="4">Nenhuma sessão registrada ainda.</td>`;
+        row.innerHTML = `<td class="empty-state" colspan="5">Nenhuma sessão registrada ainda.</td>`;
         tbody.appendChild(row);
         drawAvgTimeChart([]);
         return;
       }
 
-      history.slice().reverse().forEach(item => {
-        const row = document.createElement("tr");
-        row.innerHTML = `
-          <td>${item.startedAt || "-"}</td>
-          <td>${formatStoredSessionDuration(item)}</td>
-          <td>${item.notes ?? 0}</td>
-          <td>${Number(item.avgHitSeconds || 0).toFixed(2)}</td>
-        `;
-        tbody.appendChild(row);
-      });
+      history
+        .map((item, index) => ({ item, index }))
+        .reverse()
+        .forEach(({ item, index }) => {
+          const row = document.createElement("tr");
+          row.innerHTML = `
+            <td class="action-cell"><button class="delete-row-btn" title="Excluir sessão" aria-label="Excluir sessão" onclick="deleteSessionHistoryRow(${index})">×</button></td>
+            <td>${item.startedAt || "-"}</td>
+            <td>${formatStoredSessionDuration(item)}</td>
+            <td>${item.notes ?? 0}</td>
+            <td>${Number(item.avgHitSeconds || 0).toFixed(2)}</td>
+          `;
+          tbody.appendChild(row);
+        });
 
       drawAvgTimeChart(history);
     }
@@ -1542,18 +1584,55 @@
         return targetPitchData;
       }
 
-      const rawCorrected = correctOctaveAgainstTarget(rawPitch, targetFreq);
-      const rawCents = Math.abs(centsDifference(rawCorrected, targetFreq));
+      const rawCents = Math.abs(centsDifference(rawPitch, targetFreq));
       const targetCents = Math.abs(centsDifference(targetPitchData.pitch, targetFreq));
+      const rawLooksLikeAnotherOctave = isSamePitchClassDifferentOctave(rawPitch, targetFreq, 70);
 
-      // Em notas como F4-G#4 na E aguda, a fundamental pode ficar fraca e o YIN
-      // pode preferir harmônicos/sub-harmônicos. Quando a busca focada na região
-      // da nota-alvo encontra uma leitura claramente mais próxima, ela tem prioridade.
-      if (targetPitchData.confidence >= 0.50 && targetCents <= 180 && targetCents + 25 < rawCents) {
+      // Não fazemos mais "correção de oitava contra o alvo".
+      // Antes, se o alvo fosse F2 e o usuário tocasse F4, o app dividia a frequência por 4
+      // e aceitava a resposta. Agora a busca focada na região do alvo só vence quando há
+      // evidência melhor do fundamental esperado, sem apagar uma oitava realmente tocada.
+      if (
+        targetPitchData.confidence >= 0.50 &&
+        targetCents <= 180 &&
+        targetCents + 25 < rawCents
+      ) {
+        if (rawLooksLikeAnotherOctave && rawConfidence >= targetPitchData.confidence - 0.05) {
+          return { pitch: rawPitch, confidence: rawConfidence };
+        }
+
         return targetPitchData;
       }
 
       return { pitch: rawPitch, confidence: rawConfidence };
+    }
+
+    function isSamePitchClassDifferentOctave(freq, targetFreq, toleranceCents = 70) {
+      if (!Number.isFinite(freq) || !Number.isFinite(targetFreq) || freq <= 0 || targetFreq <= 0) {
+        return false;
+      }
+
+      const midi = freqToMidi(freq);
+      const targetMidi = freqToMidi(targetFreq);
+      const samePitchClass = ((midi - targetMidi) % 12 + 12) % 12 === 0;
+      const differentOctave = midi !== targetMidi;
+      const nearestFreq = midiToFreq(midi);
+      const tunedEnough = Math.abs(centsDifference(freq, nearestFreq)) <= toleranceCents;
+
+      return samePitchClass && differentOctave && tunedEnough;
+    }
+
+    function getListeningStatusText(detectedMidi, cents, dynamicTolerance) {
+      const targetMidi = normalTarget ? normalTarget.midi : null;
+
+      if (targetMidi !== null) {
+        const samePitchClass = ((detectedMidi - targetMidi) % 12 + 12) % 12 === 0;
+        if (samePitchClass && detectedMidi !== targetMidi) {
+          return `Nota certa, mas oitava errada: toque ${normalTarget.noteFull}. Detectei ${midiToNoteWithOctave(detectedMidi)}.`;
+        }
+      }
+
+      return `Ouvindo... alvo: ${normalTarget.noteFull} / ${normalTarget.freq.toFixed(1)} Hz / diferença: ${cents > 0 ? "+" : ""}${cents.toFixed(0)} cents / tolerância atual: ±${dynamicTolerance.toFixed(0)} cents`;
     }
 
     function detectPitchNearTarget(buffer, sampleRate, targetFreq) {
