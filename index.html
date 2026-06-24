@@ -945,8 +945,8 @@
         const source = audioContext.createMediaStreamSource(micStream);
 
         analyser = audioContext.createAnalyser();
-        analyser.fftSize = 4096;
-        analyser.smoothingTimeConstant = 0.08;
+        analyser.fftSize = 8192;
+        analyser.smoothingTimeConstant = 0;
         source.connect(analyser);
 
         pitchHistory = [];
@@ -1016,27 +1016,25 @@
         return;
       }
 
-      const pitchData = detectPitchYin(buffer, audioContext.sampleRate);
-      const fallbackPitch = pitchData.pitch === -1 ? autoCorrelate(buffer, audioContext.sampleRate, noiseFloorRms) : -1;
-      const targetPitchData = detectPitchNearTarget(buffer, audioContext.sampleRate, normalTarget.freq);
-      const selectedPitchData = chooseBestPitchCandidate(pitchData, fallbackPitch, targetPitchData, normalTarget.freq);
-      const pitch = selectedPitchData.pitch;
-      const confidence = selectedPitchData.confidence;
+      const pitchData = detectGuitarPitch(buffer, audioContext.sampleRate);
+      const pitch = pitchData.pitch;
+      const confidence = pitchData.confidence;
 
-      if (pitch !== -1 && confidence >= 0.48) {
+      if (pitch !== -1 && confidence >= 0.55) {
         addPitchReading(pitch, confidence, rms);
         const smoothed = getSmoothedPitch();
 
         if (smoothed) {
           const detectedMidi = freqToMidi(smoothed.pitch);
           const detectedNote = midiToNoteWithOctave(detectedMidi);
-          const cents = centsDifference(smoothed.pitch, normalTarget.freq);
+          const centsToDetectedNote = centsDifference(smoothed.pitch, midiToFreq(detectedMidi));
+          const centsToTarget = centsDifference(smoothed.pitch, normalTarget.freq);
           const dynamicTolerance = getDynamicTolerance(settings.toleranceCents, smoothed.confidence, rms);
           const now = performance.now();
 
           document.getElementById("detectedNote").textContent = detectedNote;
           document.getElementById("detectedFreq").textContent = `${smoothed.pitch.toFixed(1)} Hz`;
-          document.getElementById("detectedCents").textContent = `${cents > 0 ? "+" : ""}${cents.toFixed(0)} cents`;
+          document.getElementById("detectedCents").textContent = `${centsToDetectedNote > 0 ? "+" : ""}${centsToDetectedNote.toFixed(0)} cents`;
 
           if (detectedNote !== lastCandidateNote) {
             lastCandidateNote = detectedNote;
@@ -1045,8 +1043,7 @@
           }
 
           const attackSettled = now - noteFirstSeenAt >= settings.attackIgnoreMs;
-          const octaveMatches = detectedMidi === normalTarget.midi;
-          const exactEnough = octaveMatches && Math.abs(cents) <= dynamicTolerance;
+          const exactEnough = detectedMidi === normalTarget.midi && Math.abs(centsToTarget) <= dynamicTolerance;
 
           if (exactEnough && attackSettled && canScoreNormal) {
             stableCorrectCount++;
@@ -1070,9 +1067,9 @@
             stableCorrectCount = 0;
 
             if (canScoreNormal) {
-              document.getElementById("normalStatus").className = attackSettled ? "status warnText" : "status warnText";
+              document.getElementById("normalStatus").className = "status warnText";
               document.getElementById("normalStatus").textContent = attackSettled
-                ? getListeningStatusText(detectedMidi, cents, dynamicTolerance)
+                ? getListeningStatusText(detectedMidi, centsToTarget, dynamicTolerance)
                 : "Ignorando o ataque inicial da nota. Segure a nota por um instante.";
             }
           }
@@ -1860,7 +1857,7 @@
         });
         temporaryContext = new (window.AudioContext || window.webkitAudioContext)();
         temporaryAnalyser = temporaryContext.createAnalyser();
-        temporaryAnalyser.fftSize = 4096;
+        temporaryAnalyser.fftSize = 8192;
         const source = temporaryContext.createMediaStreamSource(temporaryStream);
         source.connect(temporaryAnalyser);
 
@@ -1916,6 +1913,111 @@
 
         sample();
       });
+    }
+
+
+    // Pipeline de afinador cromático para guitarra.
+    // 1) estima a frequência fundamental sem olhar para a nota-alvo;
+    // 2) estabiliza leituras vizinhas;
+    // 3) só depois o app compara nota + oitava contra o desafio.
+    function detectGuitarPitch(buffer, sampleRate) {
+      const prepared = prepareBufferForTuner(buffer);
+      const mpm = detectPitchMpm(prepared, sampleRate);
+
+      if (mpm.pitch !== -1 && mpm.confidence >= 0.62) {
+        return mpm;
+      }
+
+      const yin = detectPitchYin(prepared, sampleRate);
+
+      if (mpm.pitch !== -1 && yin.pitch !== -1) {
+        const distance = Math.abs(centsDifference(mpm.pitch, yin.pitch));
+
+        // Quando os dois algoritmos concordam, usa a leitura mais confiável.
+        if (distance <= 70) {
+          return mpm.confidence >= yin.confidence ? mpm : yin;
+        }
+
+        // Em caso de conflito, não desloca oitava nem força a região do alvo.
+        // Prioriza o MPM se a clareza for razoável, pois ele costuma funcionar
+        // bem como núcleo de afinadores cromáticos monofônicos.
+        if (mpm.confidence >= 0.55) return mpm;
+        if (yin.confidence >= 0.60) return yin;
+      }
+
+      if (yin.pitch !== -1 && yin.confidence >= 0.58) return yin;
+      if (mpm.pitch !== -1 && mpm.confidence >= 0.50) return mpm;
+
+      return { pitch: -1, confidence: 0 };
+    }
+
+    function prepareBufferForTuner(buffer) {
+      const prepared = new Float32Array(buffer.length);
+      let mean = 0;
+      for (let i = 0; i < buffer.length; i++) mean += buffer[i];
+      mean /= buffer.length || 1;
+
+      // Remove DC offset e aplica janela Hann. Isso é padrão em analisadores de áudio
+      // para reduzir vazamento e deixar a frequência fundamental mais estável.
+      for (let i = 0; i < buffer.length; i++) {
+        const windowValue = 0.5 * (1 - Math.cos((2 * Math.PI * i) / (buffer.length - 1)));
+        prepared[i] = (buffer[i] - mean) * windowValue;
+      }
+
+      return prepared;
+    }
+
+    // McLeod Pitch Method simplificado: usa a Normalized Square Difference Function.
+    // É uma base comum para afinadores por microfone porque trabalha no domínio do tempo
+    // e é menos ingênuo que autocorrelação pura.
+    function detectPitchMpm(buffer, sampleRate) {
+      const minFreq = 60;
+      const maxFreq = 1400;
+      const minTau = Math.max(2, Math.floor(sampleRate / maxFreq));
+      const maxTau = Math.min(Math.floor(sampleRate / minFreq), Math.floor(buffer.length / 2));
+
+      if (maxTau <= minTau + 2) return { pitch: -1, confidence: 0 };
+
+      const nsdf = new Float32Array(maxTau + 1);
+
+      for (let tau = 0; tau <= maxTau; tau++) {
+        let acf = 0;
+        let divisor = 0;
+        const limit = buffer.length - tau;
+
+        for (let i = 0; i < limit; i++) {
+          const a = buffer[i];
+          const b = buffer[i + tau];
+          acf += a * b;
+          divisor += a * a + b * b;
+        }
+
+        nsdf[tau] = divisor ? (2 * acf) / divisor : 0;
+      }
+
+      const peaks = [];
+      let highest = 0;
+
+      for (let tau = minTau + 1; tau < maxTau - 1; tau++) {
+        if (nsdf[tau] > nsdf[tau - 1] && nsdf[tau] >= nsdf[tau + 1] && nsdf[tau] > 0.30) {
+          const refinedTau = parabolicInterpolate(nsdf, tau);
+          const value = nsdf[tau];
+          peaks.push({ tau, refinedTau, value });
+          if (value > highest) highest = value;
+        }
+      }
+
+      if (!peaks.length || highest < 0.42) return { pitch: -1, confidence: 0 };
+
+      const cutoff = highest * 0.88;
+      const selected = peaks.find(peak => peak.value >= cutoff) || peaks.reduce((best, peak) => peak.value > best.value ? peak : best, peaks[0]);
+      const frequency = sampleRate / selected.refinedTau;
+
+      if (!Number.isFinite(frequency) || frequency < minFreq || frequency > maxFreq) {
+        return { pitch: -1, confidence: 0 };
+      }
+
+      return { pitch: frequency, confidence: clamp(selected.value, 0, 1) };
     }
 
     // Detecção YIN: mais estável para instrumentos reais do que a autocorrelação simples.
