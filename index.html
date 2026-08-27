@@ -1016,7 +1016,12 @@
         return;
       }
 
-      const pitchData = detectGuitarPitch(buffer, audioContext.sampleRate);
+      const pitchData = detectGuitarPitch(
+        buffer,
+        audioContext.sampleRate,
+        normalTarget.string.midi,
+        settings.fretCount
+      );
       const pitch = pitchData.pitch;
       const confidence = pitchData.confidence;
 
@@ -1920,15 +1925,18 @@
     // 1) estima a frequência fundamental sem olhar para a nota-alvo;
     // 2) estabiliza leituras vizinhas;
     // 3) só depois o app compara nota + oitava contra o desafio.
-    function detectGuitarPitch(buffer, sampleRate) {
+    function detectGuitarPitch(buffer, sampleRate, openStringMidi = null, fretCount = 24) {
       const prepared = prepareBufferForTuner(buffer);
-      const mpm = detectPitchMpm(prepared, sampleRate);
-
-      if (mpm.pitch !== -1 && mpm.confidence >= 0.62) {
-        return mpm;
-      }
-
-      const yin = detectPitchYin(prepared, sampleRate);
+      const mpm = resolveOctaveForString(
+        detectPitchMpm(prepared, sampleRate),
+        openStringMidi,
+        fretCount
+      );
+      const yin = resolveOctaveForString(
+        detectPitchYin(prepared, sampleRate),
+        openStringMidi,
+        fretCount
+      );
 
       if (mpm.pitch !== -1 && yin.pitch !== -1) {
         const distance = Math.abs(centsDifference(mpm.pitch, yin.pitch));
@@ -1938,17 +1946,64 @@
           return mpm.confidence >= yin.confidence ? mpm : yin;
         }
 
-        // Em caso de conflito, não desloca oitava nem força a região do alvo.
-        // Prioriza o MPM se a clareza for razoável, pois ele costuma funcionar
-        // bem como núcleo de afinadores cromáticos monofônicos.
-        if (mpm.confidence >= 0.55) return mpm;
-        if (yin.confidence >= 0.60) return yin;
+        // Em caso de conflito, escolhe a estimativa mais confiável. Os dois
+        // detectores sempre são executados: um MPM aparentemente confiante
+        // também pode estar preso em um sub-harmônico (erro exato de oitava).
+        const bestCandidate = mpm.confidence >= yin.confidence ? mpm : yin;
+        if (bestCandidate.confidence >= 0.55) return bestCandidate;
       }
 
       if (yin.pitch !== -1 && yin.confidence >= 0.58) return yin;
       if (mpm.pitch !== -1 && mpm.confidence >= 0.50) return mpm;
 
       return { pitch: -1, confidence: 0 };
+    }
+
+    function resolveOctaveForString(pitchData, openStringMidi, fretCount) {
+      if (
+        !pitchData ||
+        pitchData.pitch === -1 ||
+        !Number.isFinite(openStringMidi) ||
+        !Number.isFinite(fretCount)
+      ) {
+        return pitchData;
+      }
+
+      const detectedMidi = 69 + 12 * Math.log2(pitchData.pitch / 440);
+      // A margem absorve bends leves, vibrato e pequenas desafinações nas
+      // extremidades sem permitir uma nota fisicamente impossível na corda.
+      const minMidi = openStringMidi - 0.75;
+      const maxMidi = openStringMidi + fretCount + 0.75;
+
+      if (detectedMidi >= minMidi && detectedMidi <= maxMidi) {
+        return pitchData;
+      }
+
+      // Erros de período em guitarra aparecem sobretudo como f/2 ou 2f.
+      // Só corrigimos quando a leitura original está fora da extensão da
+      // corda sorteada e uma transposição por oitava entra nessa extensão.
+      // Assim, a correção usa a corda, mas não força a nota específica do alvo.
+      const candidates = [-1, 1, -2, 2]
+        .map(octaves => ({
+          octaves,
+          pitch: pitchData.pitch * Math.pow(2, octaves),
+          midi: detectedMidi + 12 * octaves
+        }))
+        .filter(candidate =>
+          candidate.pitch >= 60 &&
+          candidate.pitch <= 1400 &&
+          candidate.midi >= minMidi &&
+          candidate.midi <= maxMidi
+        )
+        .sort((a, b) => Math.abs(a.octaves) - Math.abs(b.octaves));
+
+      if (!candidates.length) return pitchData;
+
+      return {
+        pitch: candidates[0].pitch,
+        confidence: pitchData.confidence * 0.97,
+        octaveCorrected: true
+      };
     }
 
     function prepareBufferForTuner(buffer) {
